@@ -6,7 +6,7 @@ follow [semver](https://semver.org).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-XX-XX
+## [1.0.0] - 2026-05-11
 
 ### Added
 - `SalesConfig` with per-app token URLs.
