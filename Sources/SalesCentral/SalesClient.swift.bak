@@ -1,6 +1,6 @@
 import Foundation
 
-/// The single entry point for talking to the SalesCentral backend.
+/// The single entry point for talking to the central-sales-rest backend.
 ///
 /// `SalesClient` is an actor — call it from anywhere with `await`. It owns
 /// the user JWT (read/written through the configured `TokenStore`) and

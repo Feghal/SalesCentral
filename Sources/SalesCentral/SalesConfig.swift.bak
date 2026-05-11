@@ -10,7 +10,7 @@ import Foundation
 /// You don't have to type these by hand: open your app's detail page in the
 /// admin and copy the prebuilt Swift snippet from the "SDK config" card.
 public struct SalesConfig: Sendable {
-    /// The public origin where the SalesCentral service is reachable,
+    /// The public origin where the central-sales-rest service is reachable,
     /// e.g. `https://sales.yourdomain.com`. No trailing slash.
     public let baseURL: URL
 

@@ -1,4 +1,4 @@
-# CentralSales (Swift SDK)
+# SalesCentral (Swift SDK)
 
 Swift SDK for the **central_sales_rest** backend. Wraps every operation —
 users, signed-receipt validation, subscriptions, credits, sessions, custom
@@ -18,7 +18,7 @@ dependencies: [
 ],
 targets: [
     .target(name: "MyApp", dependencies: [
-        .product(name: "CentralSales", package: "central_sales_rest"),
+        .product(name: "SalesCentral", package: "central_sales_rest"),
     ])
 ]
 ```
@@ -54,7 +54,7 @@ them in your app binary is fine.
 
 ```swift
 import SwiftUI
-import CentralSales
+import SalesCentral
 
 @main
 struct MyApp: App {
@@ -96,7 +96,7 @@ rather drive the state yourself.
 ## Quick start (plain `SalesClient`)
 
 ```swift
-import CentralSales
+import SalesCentral
 import StoreKit
 
 let client = SalesClient(config)

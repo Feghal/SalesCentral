@@ -1,7 +1,7 @@
 // swift-tools-version:5.9
 import PackageDescription
 
-// CentralSales — Swift SDK for the central_sales_rest backend.
+// SalesCentral — Swift SDK for the central_sales_rest backend.
 //
 // Single-target library. No third-party dependencies; everything is built
 // against Foundation, StoreKit 2, UIKit (iOS), and Security (Keychain).
@@ -9,7 +9,7 @@ import PackageDescription
 // Minimum platforms reflect StoreKit 2's availability.
 
 let package = Package(
-    name: "CentralSales",
+    name: "SalesCentral",
     platforms: [
         .iOS(.v15),
         .macOS(.v12),
@@ -17,17 +17,17 @@ let package = Package(
         .watchOS(.v8),
     ],
     products: [
-        .library(name: "CentralSales", targets: ["CentralSales"]),
+        .library(name: "SalesCentral", targets: ["SalesCentral"]),
     ],
     targets: [
         .target(
-            name: "CentralSales",
-            path: "Sources/CentralSales"
+            name: "SalesCentral",
+            path: "Sources/SalesCentral"
         ),
         .testTarget(
-            name: "CentralSalesTests",
-            dependencies: ["CentralSales"],
-            path: "Tests/CentralSalesTests"
+            name: "SalesCentralTests",
+            dependencies: ["SalesCentral"],
+            path: "Tests/SalesCentralTests"
         ),
     ]
 )

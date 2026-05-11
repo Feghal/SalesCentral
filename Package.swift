@@ -1,7 +1,7 @@
 // swift-tools-version:5.9
 import PackageDescription
 
-// SalesCentral — Swift SDK for the central_sales_rest backend.
+// SalesCentral — Swift SDK for the SalesCentral backend.
 //
 // Single-target library. No third-party dependencies; everything is built
 // against Foundation, StoreKit 2, UIKit (iOS), and Security (Keychain).

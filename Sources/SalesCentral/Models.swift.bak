@@ -1,6 +1,6 @@
 import Foundation
 
-// Decodable models that mirror the SalesCentral response shapes.
+// Decodable models that mirror the central_sales_rest response shapes.
 // Everything is Sendable so an actor can hand it back to the main thread.
 
 public struct SalesUser: Decodable, Sendable, Equatable {
