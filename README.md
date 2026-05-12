@@ -29,13 +29,19 @@ Requirements: **iOS 16 / macOS 13 / tvOS 16 / watchOS 9**, Swift 5.9+. No third-
 
 ## Configure
 
-Configuration lives in your **`Info.plist`** — no Swift file to manage. Open
-the admin's App Detail → SDK config card, switch to the **Info.plist** tab,
-and copy the dictionary it generates (tokens pre-filled). Paste inside the
-top-level `<dict>` of your `Info.plist` (open as Source Code in Xcode):
+Modern Xcode iOS projects don't ship a standalone `Info.plist`. The SDK
+reads its configuration from a small **`SalesCentral.plist`** file you drop
+into the app target instead.
+
+In Xcode: **File → New → File from Template…** → Property List → name it
+**`SalesCentral.plist`**. Right-click the file → **Open As → Source Code**
+and paste the snippet from the admin's App Detail → SDK config card
+(**SalesCentral.plist** tab):
 
 ```xml
-<key>SalesCentral</key>
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
 <dict>
     <key>baseURL</key>
     <string>https://sales.yourdomain.com</string>
@@ -59,7 +65,12 @@ top-level `<dict>` of your `Info.plist` (open as Source Code in Xcode):
         <string>917a5d766e09</string>
     </dict>
 </dict>
+</plist>
 ```
+
+Older projects that still have a manual `Info.plist` file can paste the
+nested-dict form (admin's **Info.plist** tab) under a `SalesCentral` key
+inside Info.plist instead — the SDK checks both locations.
 
 ## Quick start (SwiftUI)
 
@@ -95,10 +106,11 @@ struct RootView: View {
 }
 ```
 
-`SalesCentral.start()` reads `Info.plist`, ensures a guest user, subscribes
-to `Transaction.updates`, and starts the session tracker. Idempotent — safe
-to call from multiple scenes. `SalesCentral.store` is safe to reference
-before `start()` finishes (first touch lazily reads `Info.plist`).
+`SalesCentral.start()` reads `SalesCentral.plist` (or the Info.plist key as
+a fallback), ensures a guest user, subscribes to `Transaction.updates`, and
+starts the session tracker. Idempotent — safe to call from multiple
+scenes. `SalesCentral.store` is safe to reference before `start()`
+finishes (first touch lazily reads the bundle).
 
 ## Buying a product
 
@@ -226,7 +238,7 @@ isolation, build a `SalesConfig` yourself and inject it via
 `SalesCentral.configure(_:)` before `SalesCentral.start()` runs:
 
 ```swift
-let base = SalesConfig.fromInfoPlist()
+let base = SalesConfig.fromBundle()
 SalesCentral.configure(
     SalesConfig(
         baseURL: base.baseURL,

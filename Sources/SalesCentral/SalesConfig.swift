@@ -33,44 +33,87 @@ public struct SalesConfig: Sendable {
         self.tokenStore = tokenStore ?? KeychainTokenStore.shared
     }
 
-    /// Load configuration from the app's Info.plist. Expects a top-level
-    /// dictionary entry named `SalesCentral` with this shape:
+    /// Load configuration from the app bundle. Two sources are tried, in
+    /// order:
     ///
-    /// ```
-    /// SalesCentral  (Dictionary)
-    /// ├── baseURL   (String)   "https://sales.yourdomain.com"
-    /// ├── apiKey    (String)   "csk_..."
-    /// └── tokens    (Dictionary)
-    ///     ├── createOrFetchUser   (String)   "917a5d766e03"
-    ///     ├── restoreUser         (String)   "917a5d766e04"
-    ///     ├── applyPurchases      (String)   "917a5d766e05"
-    ///     ├── currentSubscription (String)   "917a5d766e06"
-    ///     ├── spendCredits        (String)   "917a5d766e07"
-    ///     ├── recordSession       (String)   "917a5d766e08"
-    ///     └── recordEvent         (String)   "917a5d766e09"
-    /// ```
+    /// 1. A standalone **`SalesCentral.plist`** resource at the bundle
+    ///    root. Modern Xcode iOS projects don't have a top-level
+    ///    `Info.plist` file anymore, so a dedicated plist is the cleanest
+    ///    way to ship SDK config — drop it into the target, no further
+    ///    setup. The file is a dictionary at top level:
     ///
-    /// The admin's App Detail → SDK config card generates this XML for
-    /// copy-paste into Info.plist.
+    ///    ```xml
+    ///    <plist version="1.0">
+    ///    <dict>
+    ///        <key>baseURL</key> <string>https://sales.yourdomain.com</string>
+    ///        <key>apiKey</key>  <string>csk_...</string>
+    ///        <key>tokens</key>
+    ///        <dict>
+    ///            <key>createOrFetchUser</key> <string>917a5d766e03</string>
+    ///            <key>restoreUser</key>       <string>917a5d766e04</string>
+    ///            ...
+    ///        </dict>
+    ///    </dict>
+    ///    </plist>
+    ///    ```
     ///
-    /// Bundle defaults to `.main`; pass a different bundle for unit tests.
-    public static func fromInfoPlist(bundle: Bundle = .main) -> SalesConfig {
-        guard let raw = bundle.object(forInfoDictionaryKey: "SalesCentral") as? [String: Any] else {
-            preconditionFailure("Info.plist is missing the 'SalesCentral' dictionary. See the admin's App Detail → SDK config card for the snippet to paste.")
+    /// 2. A `SalesCentral` dictionary entry inside the app's `Info.plist`
+    ///    (legacy / projects that still ship a manual `Info.plist`).
+    ///
+    /// The admin's App Detail → SDK config card generates both shapes —
+    /// pick whichever fits the project layout.
+    ///
+    /// `bundle` defaults to `.main`; pass a different bundle for unit
+    /// tests, app extensions, or framework targets.
+    public static func fromBundle(_ bundle: Bundle = .main) -> SalesConfig {
+        // Source 1: standalone SalesCentral.plist at bundle root.
+        if let url = bundle.url(forResource: "SalesCentral", withExtension: "plist"),
+           let data = try? Data(contentsOf: url),
+           let raw = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] {
+            return parse(raw, source: "SalesCentral.plist")
         }
+
+        // Source 2: SalesCentral key inside Info.plist.
+        if let raw = bundle.object(forInfoDictionaryKey: "SalesCentral") as? [String: Any] {
+            return parse(raw, source: "Info.plist → SalesCentral")
+        }
+
+        preconditionFailure("""
+        SalesCentral SDK could not find its configuration. Add one of:
+
+          • A SalesCentral.plist file to your app target (recommended for
+            modern Xcode projects). Generate the XML from the admin's
+            App Detail → SDK config card → "SalesCentral.plist" tab.
+
+          • A 'SalesCentral' dictionary key in your Info.plist (legacy).
+        """)
+    }
+
+    /// Back-compat alias for `fromBundle()`. Prefer `fromBundle()` going
+    /// forward — the loader looks at `SalesCentral.plist` *and* Info.plist.
+    @available(*, deprecated, renamed: "fromBundle", message: "Renamed to fromBundle() — now also reads a standalone SalesCentral.plist file.")
+    public static func fromInfoPlist(bundle: Bundle = .main) -> SalesConfig {
+        fromBundle(bundle)
+    }
+
+    // ------------------------------------------------------------------
+    // MARK: - Plist parsing
+    // ------------------------------------------------------------------
+
+    private static func parse(_ raw: [String: Any], source: String) -> SalesConfig {
         guard let urlString = raw["baseURL"] as? String, !urlString.isEmpty,
               let url = URL(string: urlString) else {
-            preconditionFailure("Info.plist 'SalesCentral.baseURL' is missing or not a valid URL.")
+            preconditionFailure("\(source): 'baseURL' is missing or not a valid URL.")
         }
         guard let apiKey = (raw["apiKey"] as? String), !apiKey.isEmpty else {
-            preconditionFailure("Info.plist 'SalesCentral.apiKey' is missing.")
+            preconditionFailure("\(source): 'apiKey' is missing.")
         }
         guard let t = raw["tokens"] as? [String: String] else {
-            preconditionFailure("Info.plist 'SalesCentral.tokens' must be a Dictionary of String → String.")
+            preconditionFailure("\(source): 'tokens' must be a Dictionary of String → String.")
         }
         func need(_ key: String) -> String {
             guard let v = t[key], !v.isEmpty else {
-                preconditionFailure("Info.plist 'SalesCentral.tokens.\(key)' is missing.")
+                preconditionFailure("\(source): 'tokens.\(key)' is missing.")
             }
             return v
         }

@@ -1,10 +1,11 @@
 import Foundation
 import StoreKit
 
-/// Top-level entry point. The SDK reads its configuration from the app's
-/// `Info.plist` (under the `SalesCentral` dictionary key — see the admin's
-/// "SDK config" card for the exact XML to paste). You then make exactly
-/// **one** call from your app launch path:
+/// Top-level entry point. The SDK reads its configuration from a
+/// `SalesCentral.plist` file in your app bundle (or, for legacy projects,
+/// a `SalesCentral` dictionary entry inside `Info.plist`). Generate the
+/// file from the admin's "SDK config" card. You then make exactly **one**
+/// call from your app launch path:
 ///
 /// ```swift
 /// // SwiftUI:
@@ -63,10 +64,11 @@ public enum SalesCentral {
     // MARK: - Lifecycle
     // ------------------------------------------------------------------
 
-    /// Configure + bootstrap the SDK in one shot. Reads `Info.plist` if it
-    /// hasn't been configured yet, then ensures a user, fetches their
-    /// current subscription, starts the StoreKit transaction observer,
-    /// and starts the session tracker.
+    /// Configure + bootstrap the SDK in one shot. Reads `SalesCentral.plist`
+    /// (or the `SalesCentral` key in Info.plist as a fallback) if no
+    /// explicit `configure(_:)` was called, then ensures a user, fetches
+    /// their current subscription, starts the StoreKit transaction
+    /// observer, and starts the session tracker.
     ///
     /// Safe to call multiple times — the bootstrap half is gated by an
     /// internal `_bootstrapped` flag and subsequent calls are no-ops.
@@ -77,7 +79,7 @@ public enum SalesCentral {
         await store.bootstrap()
     }
 
-    /// Inject an explicit `SalesConfig` instead of reading `Info.plist`.
+    /// Inject an explicit `SalesConfig` instead of reading the bundle.
     /// Useful in unit tests, app extensions, and apps that resolve config
     /// from a remote service.
     ///
@@ -91,7 +93,7 @@ public enum SalesCentral {
     }
 
     /// Drop the configured client (test hook). After `reset()`, the next
-    /// access to `store` / `shared` / `start()` re-reads `Info.plist`.
+    /// access to `store` / `shared` / `start()` re-reads the bundle.
     public static func reset() {
         _client = nil
         _store = nil
@@ -102,7 +104,7 @@ public enum SalesCentral {
     // MARK: - Shared instances (lazy-configured)
     // ------------------------------------------------------------------
 
-    /// The shared `SalesClient` actor. Triggers lazy `Info.plist`
+    /// The shared `SalesClient` actor. Triggers lazy bundle
     /// configuration on first access so SwiftUI views can reference it
     /// before `start()` has been awaited.
     public static var shared: SalesClient {
@@ -164,11 +166,12 @@ public enum SalesCentral {
     // MARK: - Private
     // ------------------------------------------------------------------
 
-    /// Lazily configure from `Info.plist` if no explicit `configure(_:)`
-    /// has been called yet.
+    /// Lazily configure from the bundle (`SalesCentral.plist` if present,
+    /// otherwise the `SalesCentral` key inside Info.plist) if no explicit
+    /// `configure(_:)` has been called yet.
     private static func ensureConfigured() {
         guard _client == nil else { return }
-        configure(.fromInfoPlist())
+        configure(.fromBundle())
     }
 }
 
