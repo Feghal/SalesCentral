@@ -1,30 +1,53 @@
 import Foundation
 import StoreKit
 
-/// Top-level entry point for the SDK. Configure once at app launch, then
-/// call methods statically anywhere in your app:
+/// Top-level entry point. The SDK reads its configuration from the app's
+/// `Info.plist` (under the `SalesCentral` dictionary key — see the admin's
+/// "SDK config" card for the exact XML to paste). You then make exactly
+/// **one** call from your app launch path:
 ///
 /// ```swift
-/// // In MyApp.init() — runs once, before any view appears:
-/// SalesCentral.configure(salesConfig)
+/// // SwiftUI:
+/// @main
+/// struct MyApp: App {
+///     var body: some Scene {
+///         WindowGroup {
+///             RootView()
+///                 .environmentObject(SalesCentral.store)
+///                 .task { await SalesCentral.start() }
+///         }
+///     }
+/// }
 ///
-/// // In your root scene's .task — runs once, after the first window opens:
-/// await SalesCentral.bootstrap()
-///
-/// // Anywhere — buy a StoreKit product end-to-end:
-/// switch try await SalesCentral.purchase(product) {
-/// case .success(let applied):  showThanks()
-/// case .userCancelled:          break
-/// case .pending:                showAskToBuyPending()
-/// case .unverified(let reason): showError(reason)
+/// // UIKit:
+/// func application(_ application: UIApplication, didFinishLaunchingWithOptions ...) -> Bool {
+///     Task { await SalesCentral.start() }
+///     return true
 /// }
 /// ```
 ///
-/// `SalesCentral.configure(_:)` is idempotent — repeated calls are ignored
-/// so SwiftUI scene re-creation, unit-test resets, or accidental
-/// double-configuration don't blow away the existing client. To swap
-/// configuration mid-process (e.g. test fixtures), call
-/// `SalesCentral.reset()` first.
+/// That's it — no separate config file, no `configure(_:)` call, no
+/// `@StateObject` to wire up.
+///
+/// Everywhere else in your app:
+///
+/// ```swift
+/// try await SalesCentral.purchase(product)
+/// try await SalesCentral.shared.spendCredits(50, reason: "image_gen")
+/// ```
+///
+/// ## Lazy configuration
+/// `SalesCentral.store` and `SalesCentral.shared` are safe to reference
+/// **before** `start()` is awaited — first access reads `Info.plist`
+/// synchronously and creates the client. `start()` then layers the
+/// async bootstrap (ensure user, observe transactions, start session
+/// tracker) on top. Both are idempotent.
+///
+/// ## Custom bundle (tests, app extensions)
+/// If you need to load config from a non-`.main` bundle, call
+/// `SalesCentral.configure(.fromInfoPlist(bundle: myBundle))` before any
+/// access. Tests that want a fully fake config can pass any `SalesConfig`
+/// to `configure(_:)`.
 @MainActor
 public enum SalesCentral {
 
@@ -34,15 +57,32 @@ public enum SalesCentral {
 
     private static var _client: SalesClient?
     private static var _store: SalesStore?
+    private static var _bootstrapped = false
 
     // ------------------------------------------------------------------
-    // MARK: - Configuration
+    // MARK: - Lifecycle
     // ------------------------------------------------------------------
 
-    /// Configure the SDK. Call **exactly once**, as early in app launch as
-    /// possible — typically from `App.init()` (SwiftUI) or
-    /// `application(_:didFinishLaunchingWithOptions:)` (UIKit). Subsequent
-    /// calls are no-ops.
+    /// Configure + bootstrap the SDK in one shot. Reads `Info.plist` if it
+    /// hasn't been configured yet, then ensures a user, fetches their
+    /// current subscription, starts the StoreKit transaction observer,
+    /// and starts the session tracker.
+    ///
+    /// Safe to call multiple times — the bootstrap half is gated by an
+    /// internal `_bootstrapped` flag and subsequent calls are no-ops.
+    public static func start() async {
+        ensureConfigured()
+        if _bootstrapped { return }
+        _bootstrapped = true
+        await store.bootstrap()
+    }
+
+    /// Inject an explicit `SalesConfig` instead of reading `Info.plist`.
+    /// Useful in unit tests, app extensions, and apps that resolve config
+    /// from a remote service.
+    ///
+    /// First call wins; later calls are ignored. Use `reset()` first to
+    /// re-configure mid-process.
     public static func configure(_ config: SalesConfig) {
         guard _client == nil else { return }
         let c = SalesClient(config)
@@ -50,66 +90,54 @@ public enum SalesCentral {
         _store = SalesStore(client: c)
     }
 
-    /// Drop the configured client. Useful in tests or when you need to
-    /// re-`configure(_:)` with different settings inside the same process.
+    /// Drop the configured client (test hook). After `reset()`, the next
+    /// access to `store` / `shared` / `start()` re-reads `Info.plist`.
     public static func reset() {
         _client = nil
         _store = nil
+        _bootstrapped = false
     }
 
-    /// Has `configure(_:)` been called?
-    public static var isConfigured: Bool { _client != nil }
-
     // ------------------------------------------------------------------
-    // MARK: - Shared instances
+    // MARK: - Shared instances (lazy-configured)
     // ------------------------------------------------------------------
 
-    /// The shared underlying client. Use this for plain async/await calls
-    /// from non-SwiftUI code (services, view models, AppDelegate).
+    /// The shared `SalesClient` actor. Triggers lazy `Info.plist`
+    /// configuration on first access so SwiftUI views can reference it
+    /// before `start()` has been awaited.
     public static var shared: SalesClient {
-        guard let c = _client else {
-            preconditionFailure("SalesCentral.configure(_:) must be called before SalesCentral.shared.")
-        }
-        return c
+        ensureConfigured()
+        return _client!
     }
 
-    /// The shared SwiftUI store. Pass to `.environmentObject(...)` on your
+    /// The shared `SalesStore`. Pass to `.environmentObject(...)` on your
     /// root view; the store's `@Published` properties drive re-renders
     /// when user / subscription state changes.
     public static var store: SalesStore {
-        guard let s = _store else {
-            preconditionFailure("SalesCentral.configure(_:) must be called before SalesCentral.store.")
-        }
-        return s
+        ensureConfigured()
+        return _store!
     }
 
-    // ------------------------------------------------------------------
-    // MARK: - Lifecycle
-    // ------------------------------------------------------------------
-
-    /// Bootstrap the SDK. Ensures a user exists, fetches their current
-    /// subscription, starts the StoreKit transaction observer, and starts
-    /// the session tracker. Idempotent; safe to call multiple times.
-    public static func bootstrap(_ context: UserContext = .current()) async {
-        await store.bootstrap(context)
-    }
+    /// Has the SDK been configured (lazily or via `configure(_:)`)?
+    public static var isConfigured: Bool { _client != nil }
 
     // ------------------------------------------------------------------
-    // MARK: - Purchase
+    // MARK: - Purchase (end-to-end)
     // ------------------------------------------------------------------
 
-    /// End-to-end purchase: drives StoreKit's purchase dialog, validates
-    /// the verified transaction, uploads the signed JWS receipt to your
-    /// SalesCentral backend, applies effects on the user, finishes the
-    /// transaction so it doesn't re-emit on next launch, and refreshes the
-    /// shared `SalesStore` so SwiftUI views see the new state immediately.
+    /// Drive StoreKit's purchase dialog, validate the verified transaction,
+    /// upload the signed JWS receipt to your SalesCentral backend, apply
+    /// effects on the user, finish the transaction so it doesn't re-emit
+    /// on next launch, and refresh the shared `SalesStore` so SwiftUI
+    /// views see the new state immediately.
     ///
     /// Throws on network errors or backend rejection
-    /// (e.g. `product_not_registered`). UI should:
-    ///   - branch on the returned `PurchaseResult` for normal flow outcomes,
-    ///   - and `catch` for retryable failures.
+    /// (e.g. `product_not_registered`). UI should branch on the returned
+    /// `PurchaseResult` for normal flow outcomes and `catch` for retryable
+    /// failures.
     @discardableResult
     public static func purchase(_ product: Product) async throws -> PurchaseResult {
+        ensureConfigured()
         let result = try await product.purchase()
         switch result {
         case .success(let verification):
@@ -118,7 +146,6 @@ public enum SalesCentral {
                 let jws = String(decoding: txn.jsonRepresentation, as: UTF8.self)
                 let resp = try await shared.applyReceipt(jws)
                 await txn.finish()
-                // Sync store state so views update without a manual refetch.
                 await store.syncAfterPurchase(user: resp.user)
                 return .success(applied: resp.applied)
             case .unverified(_, let error):
@@ -132,6 +159,17 @@ public enum SalesCentral {
             return .userCancelled
         }
     }
+
+    // ------------------------------------------------------------------
+    // MARK: - Private
+    // ------------------------------------------------------------------
+
+    /// Lazily configure from `Info.plist` if no explicit `configure(_:)`
+    /// has been called yet.
+    private static func ensureConfigured() {
+        guard _client == nil else { return }
+        configure(.fromInfoPlist())
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -143,23 +181,22 @@ public enum PurchaseResult: Sendable {
 
     /// Receipt accepted by your backend; effects (premium, credits,
     /// entitlements, feature unlocks) have been applied to the user.
-    /// `applied` is the per-receipt summary so UI can describe what
+    /// `applied` is the per-receipt summary if you want to inspect what
     /// changed.
     case success(applied: [AppliedReceipt])
 
-    /// User dismissed the StoreKit purchase dialog. Show nothing — this
-    /// isn't an error.
+    /// User dismissed the StoreKit purchase dialog. Not an error.
     case userCancelled
 
     /// Apple's "Ask to Buy" / strong customer authentication is awaiting
-    /// approval. The transaction observer started by `bootstrap()` will
+    /// approval. The transaction observer started by `start()` will
     /// upload the receipt automatically once Apple resolves it; you can
     /// show a "pending approval" hint in the meantime.
     case pending
 
     /// StoreKit's local signature verification failed for the returned
-    /// transaction. This is rare and signals tampering or a corrupted
-    /// StoreKit response — **do not unlock the purchase**.
+    /// transaction. Rare; signals tampering or a corrupted StoreKit
+    /// response — **do not unlock the purchase**.
     case unverified(reason: String)
 
     /// Convenience: was the purchase fully completed (effects applied)?

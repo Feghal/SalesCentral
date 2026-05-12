@@ -27,33 +27,41 @@ Or in Xcode: **File → Add Package Dependencies… → paste the repo URL**.
 
 ## Configure
 
-The SDK is a singleton. You configure it once at app launch, then call
-every operation as a static on `SalesCentral` from anywhere in your code.
+Configuration lives in your **`Info.plist`** — no Swift file to manage. Open
+the admin's App Detail → SDK config card, switch to the **Info.plist** tab,
+and copy the dictionary it generates (tokens pre-filled). Paste inside the
+top-level `<dict>` of your `Info.plist` (open as Source Code in Xcode):
 
-Add one new file (`SalesCentralConfig.swift`) with the snippet from the
-admin's App Detail page:
-
-```swift
-// SalesCentralConfig.swift
-import Foundation
-import SalesCentral
-
-let salesConfig = SalesConfig(
-    baseURL: URL(string: "https://sales.yourdomain.com")!,
-    apiKey:  "csk_8a3f...",
-    tokens:  .init(
-        createOrFetchUser:   "917a5d766e03",
-        restoreUser:         "917a5d766e04",
-        applyPurchases:      "917a5d766e05",
-        currentSubscription: "917a5d766e06",
-        spendCredits:        "917a5d766e07",
-        recordSession:       "917a5d766e08",
-        recordEvent:         "917a5d766e09"
-    )
-)
+```xml
+<key>SalesCentral</key>
+<dict>
+    <key>baseURL</key>
+    <string>https://sales.yourdomain.com</string>
+    <key>apiKey</key>
+    <string>csk_8a3f...</string>
+    <key>tokens</key>
+    <dict>
+        <key>createOrFetchUser</key>
+        <string>917a5d766e03</string>
+        <key>restoreUser</key>
+        <string>917a5d766e04</string>
+        <key>applyPurchases</key>
+        <string>917a5d766e05</string>
+        <key>currentSubscription</key>
+        <string>917a5d766e06</string>
+        <key>spendCredits</key>
+        <string>917a5d766e07</string>
+        <key>recordSession</key>
+        <string>917a5d766e08</string>
+        <key>recordEvent</key>
+        <string>917a5d766e09</string>
+    </dict>
+</dict>
 ```
 
 ## Quick start (SwiftUI)
+
+One call. That's it.
 
 ```swift
 import SwiftUI
@@ -61,20 +69,11 @@ import SalesCentral
 
 @main
 struct MyApp: App {
-
-    init() {
-        // Synchronous; safe in App.init. No network here.
-        SalesCentral.configure(salesConfig)
-    }
-
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(SalesCentral.store)
-                .task {
-                    // Network-bound bootstrap; runs once after first scene.
-                    await SalesCentral.bootstrap()
-                }
+                .task { await SalesCentral.start() }
         }
     }
 }
@@ -94,15 +93,10 @@ struct RootView: View {
 }
 ```
 
-`SalesCentral.bootstrap()` does three things on first launch:
-
-1. Calls `ensureUser` — creates a guest user, stores the JWT in the Keychain.
-2. Subscribes to `Transaction.updates` to auto-upload new purchases.
-3. Starts a session tracker that records foreground-time on every app cycle.
-
-> `configure` belongs in `App.init()` (synchronous, runs before any view
-> appears). `bootstrap` belongs in `.task` (async, runs after the first
-> scene is painted).
+`SalesCentral.start()` reads `Info.plist`, ensures a guest user, subscribes
+to `Transaction.updates`, and starts the session tracker. Idempotent — safe
+to call from multiple scenes. `SalesCentral.store` is safe to reference
+before `start()` finishes (first touch lazily reads `Info.plist`).
 
 ## Buying a product
 
@@ -145,15 +139,13 @@ await SalesCentral.shared.track("level_completed", properties: ["score": .init(8
 
 ## UIKit / AppKit (no SwiftUI)
 
+Same Info.plist setup. Call `SalesCentral.start()` from the app delegate:
+
 ```swift
 // AppDelegate.swift
 func application(_ application: UIApplication,
                  didFinishLaunchingWithOptions launchOptions: …) -> Bool {
-    SalesCentral.configure(salesConfig)
-    Task {
-        _ = try await SalesCentral.shared.ensureUser()
-        await SalesCentral.shared.startObservingTransactions()
-    }
+    Task { await SalesCentral.start() }
     return true
 }
 ```

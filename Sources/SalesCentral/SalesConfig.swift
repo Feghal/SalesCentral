@@ -33,6 +33,62 @@ public struct SalesConfig: Sendable {
         self.tokenStore = tokenStore ?? KeychainTokenStore.shared
     }
 
+    /// Load configuration from the app's Info.plist. Expects a top-level
+    /// dictionary entry named `SalesCentral` with this shape:
+    ///
+    /// ```
+    /// SalesCentral  (Dictionary)
+    /// ├── baseURL   (String)   "https://sales.yourdomain.com"
+    /// ├── apiKey    (String)   "csk_..."
+    /// └── tokens    (Dictionary)
+    ///     ├── createOrFetchUser   (String)   "917a5d766e03"
+    ///     ├── restoreUser         (String)   "917a5d766e04"
+    ///     ├── applyPurchases      (String)   "917a5d766e05"
+    ///     ├── currentSubscription (String)   "917a5d766e06"
+    ///     ├── spendCredits        (String)   "917a5d766e07"
+    ///     ├── recordSession       (String)   "917a5d766e08"
+    ///     └── recordEvent         (String)   "917a5d766e09"
+    /// ```
+    ///
+    /// The admin's App Detail → SDK config card generates this XML for
+    /// copy-paste into Info.plist.
+    ///
+    /// Bundle defaults to `.main`; pass a different bundle for unit tests.
+    public static func fromInfoPlist(bundle: Bundle = .main) -> SalesConfig {
+        guard let raw = bundle.object(forInfoDictionaryKey: "SalesCentral") as? [String: Any] else {
+            preconditionFailure("Info.plist is missing the 'SalesCentral' dictionary. See the admin's App Detail → SDK config card for the snippet to paste.")
+        }
+        guard let urlString = raw["baseURL"] as? String, !urlString.isEmpty,
+              let url = URL(string: urlString) else {
+            preconditionFailure("Info.plist 'SalesCentral.baseURL' is missing or not a valid URL.")
+        }
+        guard let apiKey = (raw["apiKey"] as? String), !apiKey.isEmpty else {
+            preconditionFailure("Info.plist 'SalesCentral.apiKey' is missing.")
+        }
+        guard let t = raw["tokens"] as? [String: String] else {
+            preconditionFailure("Info.plist 'SalesCentral.tokens' must be a Dictionary of String → String.")
+        }
+        func need(_ key: String) -> String {
+            guard let v = t[key], !v.isEmpty else {
+                preconditionFailure("Info.plist 'SalesCentral.tokens.\(key)' is missing.")
+            }
+            return v
+        }
+        return SalesConfig(
+            baseURL: url,
+            apiKey: apiKey,
+            tokens: Tokens(
+                createOrFetchUser:   need("createOrFetchUser"),
+                restoreUser:         need("restoreUser"),
+                applyPurchases:      need("applyPurchases"),
+                currentSubscription: need("currentSubscription"),
+                spendCredits:        need("spendCredits"),
+                recordSession:       need("recordSession"),
+                recordEvent:         need("recordEvent")
+            )
+        )
+    }
+
     /// Map an operation to its full URL.
     public func url(for endpoint: Endpoint) -> URL {
         let token: String
