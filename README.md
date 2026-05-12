@@ -25,6 +25,8 @@ targets: [
 
 Or in Xcode: **File → Add Package Dependencies… → paste the repo URL**.
 
+Requirements: **iOS 16 / macOS 13 / tvOS 16 / watchOS 9**, Swift 5.9+. No third-party dependencies.
+
 ## Configure
 
 Configuration lives in your **`Info.plist`** — no Swift file to manage. Open

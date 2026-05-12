@@ -18,7 +18,9 @@ public final class SalesStore: ObservableObject {
     public let client: SalesClient
     private let sessionTracker: SessionTracker
 
-    public init(_ config: SalesConfig) {
+    /// Convenience: build a fresh `SalesClient` from a `SalesConfig` and
+    /// delegate to the designated initializer below.
+    public convenience init(_ config: SalesConfig) {
         self.init(client: SalesClient(config))
     }
 
