@@ -19,9 +19,23 @@ public final class SalesStore: ObservableObject {
     private let sessionTracker: SessionTracker
 
     public init(_ config: SalesConfig) {
-        let c = SalesClient(config)
-        self.client = c
-        self.sessionTracker = SessionTracker(client: c)
+        self.init(client: SalesClient(config))
+    }
+
+    /// Designated initializer. Used by `SalesCentral.configure(_:)` so the
+    /// singleton facade and `SalesStore` share a single `SalesClient`
+    /// actor — in-memory caches and the Keychain JWT stay consistent.
+    public init(client: SalesClient) {
+        self.client = client
+        self.sessionTracker = SessionTracker(client: client)
+    }
+
+    /// Sync the store's user + subscription state after an out-of-band
+    /// purchase / receipt upload (e.g. `SalesCentral.purchase(_:)`). Views
+    /// re-render immediately without waiting for the next refresh.
+    public func syncAfterPurchase(user: SalesUser?) async {
+        if let u = user { self.user = u }
+        self.subscription = try? await client.currentSubscription()
     }
 
     // ------------------------------------------------------------------

@@ -27,57 +27,33 @@ Or in Xcode: **File → Add Package Dependencies… → paste the repo URL**.
 
 ## Configure
 
-Add a new file to your Xcode target — `SalesCentralBootstrap.swift` — and
-paste the **SDK config** snippet from the admin's App Detail page inside an
-`enum` that also exposes the shared `SalesClient` and `SalesStore`. This
-gives you one place to reach the SDK from anywhere in the app:
+The SDK is a singleton. You configure it once at app launch, then call
+every operation as a static on `SalesCentral` from anywhere in your code.
+
+Add one new file (`SalesCentralConfig.swift`) with the snippet from the
+admin's App Detail page:
 
 ```swift
+// SalesCentralConfig.swift
 import Foundation
 import SalesCentral
 
-enum SalesCentralBootstrap {
-    static let config = SalesConfig(
-        baseURL: URL(string: "https://sales.yourdomain.com")!,
-        apiKey:  apiKey(),                            // see notes below
-        tokens:  .init(
-            createOrFetchUser:   "917a5d766e03",
-            restoreUser:         "917a5d766e04",
-            applyPurchases:      "917a5d766e05",
-            currentSubscription: "917a5d766e06",
-            spendCredits:        "917a5d766e07",
-            recordSession:       "917a5d766e08",
-            recordEvent:         "917a5d766e09"
-        )
+let salesConfig = SalesConfig(
+    baseURL: URL(string: "https://sales.yourdomain.com")!,
+    apiKey:  "csk_8a3f...",
+    tokens:  .init(
+        createOrFetchUser:   "917a5d766e03",
+        restoreUser:         "917a5d766e04",
+        applyPurchases:      "917a5d766e05",
+        currentSubscription: "917a5d766e06",
+        spendCredits:        "917a5d766e07",
+        recordSession:       "917a5d766e08",
+        recordEvent:         "917a5d766e09"
     )
-
-    static let client = SalesClient(config: config)
-    static let store  = SalesStore(client: client)
-
-    private static func apiKey() -> String {
-        if let k = Bundle.main.object(forInfoDictionaryKey: "SalesCentralAPIKey") as? String,
-           k.hasPrefix("csk_") { return k }
-        #if DEBUG
-        return "csk_PASTE_FOR_LOCAL_DEV"     // remove before shipping
-        #else
-        assertionFailure("SalesCentralAPIKey missing from Info.plist")
-        return ""
-        #endif
-    }
-}
+)
 ```
 
-Treat `apiKey` as a secret — read it from `Info.plist` (driven by a
-gitignored `.xcconfig`) or from your own remote config endpoint. The
-`tokens` are public routing identifiers; embedding them in the binary is
-fine.
-
 ## Quick start (SwiftUI)
-
-You don't initialize the SDK in your `@main` struct directly — that won't
-compile, because property initializers can't reach a local `config` value.
-Instead, point `@StateObject` at the bootstrap's shared store and drive the
-lifecycle with `.task`:
 
 ```swift
 import SwiftUI
@@ -85,13 +61,20 @@ import SalesCentral
 
 @main
 struct MyApp: App {
-    @StateObject private var sales = SalesCentralBootstrap.store
+
+    init() {
+        // Synchronous; safe in App.init. No network here.
+        SalesCentral.configure(salesConfig)
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(sales)
-                .task { await sales.bootstrap() }   // runs once on first appear
+                .environmentObject(SalesCentral.store)
+                .task {
+                    // Network-bound bootstrap; runs once after first scene.
+                    await SalesCentral.bootstrap()
+                }
         }
     }
 }
@@ -111,61 +94,72 @@ struct RootView: View {
 }
 ```
 
-`SalesStore.bootstrap()` does three things on first launch:
+`SalesCentral.bootstrap()` does three things on first launch:
 
 1. Calls `ensureUser` — creates a guest user, stores the JWT in the Keychain.
 2. Subscribes to `Transaction.updates` to auto-upload new purchases.
 3. Starts a session tracker that records foreground-time on every app cycle.
 
-> Don't drive bootstrap from `MyApp.init()` — `init` runs synchronously
-> before any scene exists, so you can't `await` there and any blocking work
-> delays first paint. The `.task` modifier runs after the first scene
-> appears, which is what you want.
+> `configure` belongs in `App.init()` (synchronous, runs before any view
+> appears). `bootstrap` belongs in `.task` (async, runs after the first
+> scene is painted).
 
-### Reaching the client from non-SwiftUI code
-
-Anywhere else — view models, services, helper functions, your AppDelegate —
-use `SalesCentralBootstrap.client` directly. It's the same actor instance
-the `SalesStore` wraps, so state stays consistent:
+## Buying a product
 
 ```swift
-try await SalesCentralBootstrap.client.spendCredits(50, reason: "image_gen")
+import StoreKit
+import SalesCentral
+
+func buy(_ product: Product) async {
+    do {
+        switch try await SalesCentral.purchase(product) {
+        case .success:                showThanks()
+        case .userCancelled:          break
+        case .pending:                showPendingHint()
+        case .unverified(let reason): showError(reason)
+        }
+    } catch let err as SalesError {
+        showError(err.localizedDescription)
+    } catch {
+        showError(error.localizedDescription)
+    }
+}
 ```
 
-## Quick start (plain `SalesClient`, no SwiftUI)
+`SalesCentral.purchase(_:)` drives the StoreKit dialog, verifies the
+result, uploads the signed JWS receipt to your backend, applies effects,
+finishes the transaction, and refreshes the shared store — all in one
+`await`. You never call `Transaction.updates`, `txn.finish()`, or read
+`jsonRepresentation` yourself.
 
-If you're on UIKit/AppKit or you don't want `SalesStore`, omit it from the
-bootstrap and call the client straight from your app delegate:
+## Calling from anywhere
+
+`SalesCentral.shared` is the underlying `SalesClient` actor — use it for
+all the lower-level operations:
 
 ```swift
-import SalesCentral
-import StoreKit
+try await SalesCentral.shared.spendCredits(50, reason: "image_gen")
+try await SalesCentral.shared.recordSession(start: openedAt, end: Date())
+await SalesCentral.shared.track("level_completed", properties: ["score": .init(8420)])
+```
 
-// In AppDelegate.swift:
+## UIKit / AppKit (no SwiftUI)
+
+```swift
+// AppDelegate.swift
 func application(_ application: UIApplication,
                  didFinishLaunchingWithOptions launchOptions: …) -> Bool {
+    SalesCentral.configure(salesConfig)
     Task {
-        _ = try await SalesCentralBootstrap.client.ensureUser()
-        await SalesCentralBootstrap.client.startObservingTransactions()
+        _ = try await SalesCentral.shared.ensureUser()
+        await SalesCentral.shared.startObservingTransactions()
     }
     return true
 }
 ```
 
-Buying and restoring then look the same anywhere in the app:
-
-```swift
-// After the user taps a Buy button:
-let result = try await product.purchase()
-if case .success(let v) = result, case .verified(let txn) = v {
-    let jws = String(decoding: txn.jsonRepresentation, as: UTF8.self)
-    try await SalesCentralBootstrap.client.applyReceipt(jws)
-    await txn.finish()
-}
-
-// "Restore purchases" tap:
-try await SalesCentralBootstrap.client.restorePurchases()   // SDK pulls JWS itself
-```
+`SalesCentral.purchase(_:)` works identically from UIKit — call it from a
+button handler with `Task { … }`.
 
 ## Operations
 
