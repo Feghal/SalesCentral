@@ -46,23 +46,23 @@ and paste the snippet from the admin's App Detail → SDK config card
     <key>baseURL</key>
     <string>https://sales.yourdomain.com</string>
     <key>apiKey</key>
-    <string>csk_8a3f...</string>
+    <string>csk_XXXXXXXXXXXXXXXXXXXXXXXXXXXX</string>     <!-- replace with your app's apiKey -->
     <key>tokens</key>
     <dict>
         <key>createOrFetchUser</key>
-        <string>917a5d766e03</string>
+        <string>YYYYYYYYYYYY</string>                       <!-- each token is unique per endpoint --->
         <key>restoreUser</key>
-        <string>917a5d766e04</string>
+        <string>YYYYYYYYYYYY</string>
         <key>applyPurchases</key>
-        <string>917a5d766e05</string>
+        <string>YYYYYYYYYYYY</string>
         <key>currentSubscription</key>
-        <string>917a5d766e06</string>
+        <string>YYYYYYYYYYYY</string>
         <key>spendCredits</key>
-        <string>917a5d766e07</string>
+        <string>YYYYYYYYYYYY</string>
         <key>recordSession</key>
-        <string>917a5d766e08</string>
+        <string>YYYYYYYYYYYY</string>
         <key>recordEvent</key>
-        <string>917a5d766e09</string>
+        <string>YYYYYYYYYYYY</string>
     </dict>
 </dict>
 </plist>
