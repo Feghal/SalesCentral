@@ -46,16 +46,19 @@ public struct SalesConfig: Sendable {
     ///    <plist version="1.0">
     ///    <dict>
     ///        <key>baseURL</key> <string>https://sales.yourdomain.com</string>
-    ///        <key>apiKey</key>  <string>csk_...</string>
+    ///        <key>apiKey</key>  <string>csk_XXXXXXXXXXXXXXXXXXXXXXXXXXXX</string>
     ///        <key>tokens</key>
     ///        <dict>
-    ///            <key>createOrFetchUser</key> <string>917a5d766e03</string>
-    ///            <key>restoreUser</key>       <string>917a5d766e04</string>
+    ///            <key>createOrFetchUser</key> <string>YYYYYYYYYYYY</string>
+    ///            <key>restoreUser</key>       <string>YYYYYYYYYYYY</string>
     ///            ...
     ///        </dict>
     ///    </dict>
     ///    </plist>
     ///    ```
+    ///
+    /// Replace `XXXX…` / `YYYY…` with the real values from the admin's
+    /// App Detail → SDK config card.
     ///
     /// 2. A `SalesCentral` dictionary entry inside the app's `Info.plist`
     ///    (legacy / projects that still ship a manual `Info.plist`).
