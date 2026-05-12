@@ -219,16 +219,21 @@ do {
 
 ## Custom token storage
 
-`SalesConfig` accepts a `TokenStore`. The default is the system Keychain;
-swap it for tests or per-user-account isolation:
+Default `TokenStore` is the system Keychain. For tests or per-account
+isolation, build a `SalesConfig` yourself and inject it via
+`SalesCentral.configure(_:)` before `SalesCentral.start()` runs:
 
 ```swift
-let config = SalesConfig(
-    baseURL: ...,
-    apiKey: ...,
-    tokens: ...,
-    tokenStore: InMemoryTokenStore()   // testing only
+let base = SalesConfig.fromInfoPlist()
+SalesCentral.configure(
+    SalesConfig(
+        baseURL: base.baseURL,
+        apiKey:  base.apiKey,
+        tokens:  base.tokens,
+        tokenStore: InMemoryTokenStore()   // testing only
+    )
 )
+await SalesCentral.start()
 ```
 
 ## SDK version
