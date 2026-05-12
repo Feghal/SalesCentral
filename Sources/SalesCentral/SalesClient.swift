@@ -22,6 +22,13 @@ public actor SalesClient {
     private let decoder: JSONDecoder
 
     private(set) public var currentUser: SalesUser?
+
+    /// Apple SKU strings registered for this app in the SalesCentral admin.
+    /// Populated by the most recent ensureUser / restorePurchases response
+    /// so the SDK can ask StoreKit for products without the integrator
+    /// hard-coding identifiers.
+    private(set) public var configuredProductIDs: [String] = []
+
     private var observer: StoreKitObserver?
 
     public init(_ config: SalesConfig, urlSession: URLSession = .shared) {
@@ -47,7 +54,15 @@ public actor SalesClient {
     /// context you passed in.
     @discardableResult
     public func ensureUser(context: UserContext = .current()) async throws -> SalesUser {
-        struct Resp: Decodable { let token: String; let user: SalesUser; let created: Bool }
+        struct Resp: Decodable {
+            let token: String
+            let user: SalesUser
+            let created: Bool
+            // Apple SKUs registered for this app in the admin. Present on
+            // servers that ship the product-prefetch feature; older servers
+            // omit it and we just keep an empty list.
+            let products: [String]?
+        }
         let resp: Resp = try await request(
             .createOrFetchUser,
             method: "POST",
@@ -56,6 +71,7 @@ public actor SalesClient {
         )
         config.tokenStore.write(resp.token)
         currentUser = resp.user
+        configuredProductIDs = resp.products ?? []
         return resp.user
     }
 
@@ -103,6 +119,7 @@ public actor SalesClient {
         let resp: RestoreResult = try await request(.restoreUser, method: "POST", body: body, attachUserToken: false)
         config.tokenStore.write(resp.token)
         currentUser = resp.user
+        if let ids = resp.products { configuredProductIDs = ids }
         return resp
     }
 

@@ -112,12 +112,19 @@ starts the session tracker. Idempotent — safe to call from multiple
 scenes. `SalesCentral.store` is safe to reference before `start()`
 finishes (first touch lazily reads the bundle).
 
-## Buying a product
+## Loading + buying products
+
+`import SalesCentral` re-exports StoreKit's `Product` / `Transaction` types
+so you never have to `import StoreKit` in your app code.
 
 ```swift
-import StoreKit
 import SalesCentral
 
+// 1. Load products for your paywall.
+//    No identifiers — the SDK already knows them from the admin.
+let products = try await SalesCentral.loadProducts()
+
+// 2. Buy a loaded product.
 func buy(_ product: Product) async {
     do {
         switch try await SalesCentral.purchase(product) {
@@ -132,7 +139,16 @@ func buy(_ product: Product) async {
         showError(error.localizedDescription)
     }
 }
+
+// Or skip the load step entirely:
+try await SalesCentral.purchase(productID: "com.foo.pro.monthly")
 ```
+
+`SalesCentral.purchase(_:)` drives the StoreKit dialog, validates the
+result, uploads the signed JWS receipt, applies effects, finishes the
+transaction, and refreshes the shared store — all in one `await`. You
+never call `Product.products(for:)`, `Transaction.updates`, or
+`txn.finish()` yourself.
 
 `SalesCentral.purchase(_:)` drives the StoreKit dialog, verifies the
 result, uploads the signed JWS receipt to your backend, applies effects,
@@ -168,6 +184,18 @@ func application(_ application: UIApplication,
 button handler with `Task { … }`.
 
 ## Operations
+
+Top-level facade (`SalesCentral.…`):
+
+| API | Purpose |
+|---|---|
+| `start()` | One-shot config + bootstrap. Reads `SalesCentral.plist`, ensures the user, wires up observers. |
+| `loadProducts()` / `loadProduct(_:)` / `reloadProducts()` | StoreKit products for the SKUs the admin registered. No identifiers in app code. |
+| `purchase(_:)` / `purchase(productID:)` | End-to-end purchase: dialog → verify → upload → finish → store refresh. |
+| `store` | Shared `SalesStore` for SwiftUI `.environmentObject(...)`. |
+| `shared` | Underlying `SalesClient` actor for direct API calls. |
+
+Underlying client (`SalesCentral.shared.…`):
 
 | API | Purpose |
 |---|---|

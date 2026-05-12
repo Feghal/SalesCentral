@@ -102,6 +102,25 @@ public struct RestoreResult: Decodable, Sendable {
     public let user: SalesUser
     public let restored: Bool
     public let applied: [AppliedReceipt]
+    /// Apple SKUs registered for this app in the admin. May be `nil` on
+    /// older servers that don't ship the product-prefetch feature.
+    public let products: [String]?
+
+    /// Explicit memberwise init so the SDK's local fallback paths
+    /// (no-receipts restore, tests) don't have to spell out `products: nil`.
+    public init(
+        token: String,
+        user: SalesUser,
+        restored: Bool,
+        applied: [AppliedReceipt],
+        products: [String]? = nil
+    ) {
+        self.token = token
+        self.user = user
+        self.restored = restored
+        self.applied = applied
+        self.products = products
+    }
 }
 
 /// Response shape for `POST /users`.

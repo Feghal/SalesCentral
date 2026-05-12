@@ -1,5 +1,9 @@
 import Foundation
-import StoreKit
+// Re-export StoreKit so consumers of this SDK don't have to `import StoreKit`
+// themselves. `Product`, `Transaction`, `StoreKit.Product.PurchaseResult`,
+// etc. are all in scope after `import SalesCentral` — which is the whole
+// point of the SDK: the iOS app never speaks to StoreKit directly.
+@_exported import StoreKit
 
 /// Top-level entry point. The SDK reads its configuration from a
 /// `SalesCentral.plist` file in your app bundle (or, for legacy projects,
@@ -60,6 +64,12 @@ public enum SalesCentral {
     private static var _store: SalesStore?
     private static var _bootstrapped = false
 
+    /// In-flight (or already-resolved) task for loading the app's
+    /// configured StoreKit products. `start()` kicks this off right after
+    /// `bootstrap()`. Concurrent `loadProducts()` callers await the same
+    /// task and get the same `[Product]`.
+    private static var _productsTask: Task<[Product], Error>?
+
     // ------------------------------------------------------------------
     // MARK: - Lifecycle
     // ------------------------------------------------------------------
@@ -77,6 +87,12 @@ public enum SalesCentral {
         if _bootstrapped { return }
         _bootstrapped = true
         await store.bootstrap()
+        // Right after bootstrap, the SalesClient knows which Apple SKUs the
+        // admin has registered for this app (returned from createOrFetchUser).
+        // Kick off the StoreKit lookup in the background — `loadProducts()`
+        // awaits the same task. Don't await it here so first paint isn't
+        // blocked by the StoreKit network call.
+        _productsTask = Task { try await fetchProductsFromStoreKit() }
     }
 
     /// Inject an explicit `SalesConfig` instead of reading the bundle.
@@ -95,6 +111,8 @@ public enum SalesCentral {
     /// Drop the configured client (test hook). After `reset()`, the next
     /// access to `store` / `shared` / `start()` re-reads the bundle.
     public static func reset() {
+        _productsTask?.cancel()
+        _productsTask = nil
         _client = nil
         _store = nil
         _bootstrapped = false
@@ -122,6 +140,60 @@ public enum SalesCentral {
 
     /// Has the SDK been configured (lazily or via `configure(_:)`)?
     public static var isConfigured: Bool { _client != nil }
+
+    // ------------------------------------------------------------------
+    // MARK: - Products
+    // ------------------------------------------------------------------
+
+    /// Fetch the StoreKit products the admin registered for this app.
+    ///
+    /// **You don't pass identifiers.** The SDK already knows them — the
+    /// configured SKUs come down with `start()`'s `ensureUser` round-trip,
+    /// so the iOS app can stay product-list-agnostic. Add / remove
+    /// products from the admin panel and they appear / disappear here on
+    /// the next launch, without an app update.
+    ///
+    /// Behavior:
+    ///   - If `start()` already kicked off the load and it finished:
+    ///     returns the cached array immediately.
+    ///   - If `start()` kicked it off but it's still running: awaits.
+    ///   - If `start()` hasn't been called yet: starts the SDK and the
+    ///     product load now, then awaits.
+    ///
+    /// Concurrent callers all share the same in-flight task and get the
+    /// same `[Product]`. Use `reloadProducts()` to force a fresh fetch
+    /// (e.g. after the operator just added a new product).
+    public static func loadProducts() async throws -> [Product] {
+        ensureConfigured()
+        // If start() hasn't kicked off the prefetch yet, do it on demand.
+        // This makes the call usable even from app delegates that haven't
+        // awaited start() yet.
+        if _productsTask == nil {
+            if !_bootstrapped { await start() }                 // populates _productsTask
+            if _productsTask == nil {
+                _productsTask = Task { try await fetchProductsFromStoreKit() }
+            }
+        }
+        return try await _productsTask!.value
+    }
+
+    /// Force a refetch of the registered SKUs + StoreKit lookup. Use
+    /// after an admin-panel change you want to pick up without restarting
+    /// the app. Otherwise `start()` does this once per launch.
+    @discardableResult
+    public static func reloadProducts() async throws -> [Product] {
+        ensureConfigured()
+        let task = Task { try await fetchProductsFromStoreKit(forceRefreshIDs: true) }
+        _productsTask = task
+        return try await task.value
+    }
+
+    /// Convenience: look up a single registered product by SKU. Returns
+    /// `nil` if the admin hasn't configured this id (or Apple doesn't
+    /// recognize it).
+    public static func loadProduct(_ identifier: String) async throws -> Product? {
+        try await loadProducts().first(where: { $0.id == identifier })
+    }
 
     // ------------------------------------------------------------------
     // MARK: - Purchase (end-to-end)
@@ -162,6 +234,21 @@ public enum SalesCentral {
         }
     }
 
+    /// Convenience: look up the product by id and purchase it in one
+    /// call. The lookup hits the SDK's product cache (populated by
+    /// `start()`), so it's free after first launch.
+    ///
+    /// Throws `SalesError.invalidState("product_not_found:<id>")` when:
+    ///   - the admin hasn't registered this SKU, OR
+    ///   - Apple doesn't recognize it (typo, missing in App Store Connect).
+    @discardableResult
+    public static func purchase(productID: String) async throws -> PurchaseResult {
+        guard let product = try await loadProduct(productID) else {
+            throw SalesError.invalidState("product_not_found:\(productID)")
+        }
+        return try await purchase(product)
+    }
+
     // ------------------------------------------------------------------
     // MARK: - Private
     // ------------------------------------------------------------------
@@ -172,6 +259,18 @@ public enum SalesCentral {
     private static func ensureConfigured() {
         guard _client == nil else { return }
         configure(.fromBundle())
+    }
+
+    /// Ask the client for the registered SKUs, then resolve them with
+    /// StoreKit. Optionally re-runs `ensureUser` first so a freshly added
+    /// product in the admin shows up without a relaunch.
+    private static func fetchProductsFromStoreKit(forceRefreshIDs: Bool = false) async throws -> [Product] {
+        if forceRefreshIDs {
+            _ = try await shared.ensureUser()
+        }
+        let ids = await shared.configuredProductIDs
+        guard !ids.isEmpty else { return [] }
+        return try await Product.products(for: ids)
     }
 }
 
