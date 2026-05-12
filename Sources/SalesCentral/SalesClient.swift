@@ -77,7 +77,7 @@ public actor SalesClient {
         receipts: [String]? = nil,
         context: UserContext = .current()
     ) async throws -> RestoreResult {
-        let jws = receipts ?? (await Self.currentEntitlementJWSStrings())
+        let jws = if let receipts { receipts } else { await Self.currentEntitlementJWSStrings() }
         guard !jws.isEmpty else {
             // No prior purchases on this device — fall back to a plain
             // create-or-fetch so the caller always ends up with a usable

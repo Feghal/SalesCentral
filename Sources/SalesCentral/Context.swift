@@ -242,5 +242,5 @@ public struct ConsentContext: Encodable, Sendable {
 
 /// SDK constants. Updated when the package is released.
 public enum SDKMetadata {
-    public static let version = "1.0.2"
+    public static let version = "1.0.3"
 }
