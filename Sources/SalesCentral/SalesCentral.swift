@@ -4,6 +4,9 @@ import Foundation
 // etc. are all in scope after `import SalesCentral` — which is the whole
 // point of the SDK: the iOS app never speaks to StoreKit directly.
 @_exported import StoreKit
+#if canImport(UserNotifications)
+import UserNotifications
+#endif
 
 /// Top-level entry point. The SDK reads its configuration from a
 /// `SalesCentral.plist` file in your app bundle (or, for legacy projects,
@@ -247,6 +250,84 @@ public enum SalesCentral {
             throw SalesError.invalidState("product_not_found:\(productID)")
         }
         return try await purchase(product)
+    }
+
+    // ------------------------------------------------------------------
+    // MARK: - Push notifications
+    // ------------------------------------------------------------------
+
+    /// Register the APNs device token your `AppDelegate` received in
+    /// `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)`.
+    /// The SDK converts the raw bytes to lowercase hex, captures the
+    /// current `UNUserNotificationCenter` auth status, and ships both up
+    /// to the backend via `updateContext`. Re-registering the same token
+    /// is cheap — the backend dedupes and just bumps `lastUsedAt`.
+    ///
+    /// ```swift
+    /// func application(
+    ///     _ application: UIApplication,
+    ///     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    /// ) {
+    ///     Task { try? await SalesCentral.registerPushToken(deviceToken) }
+    /// }
+    /// ```
+    public static func registerPushToken(_ deviceToken: Data) async throws {
+        ensureConfigured()
+        let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        let env = SalesCentral.pushEnvironment()
+        let auth = await SalesCentral.pushAuthStatusString()
+        let info = Bundle.main.infoDictionary ?? [:]
+        let push = PushContext(
+            token: hex,
+            environment: env,
+            authStatus: auth,
+            appVersion: info["CFBundleShortVersionString"] as? String,
+            bundleId: Bundle.main.bundleIdentifier
+        )
+        try await shared.updateContext(UserContext(push: push))
+    }
+
+    /// Tell the backend this device no longer wants to receive pushes.
+    /// Marks the most recent token inactive on the user record. The token
+    /// itself is left in the array so we can resurrect it if the user
+    /// opts back in.
+    public static func unregisterPushToken() async throws {
+        ensureConfigured()
+        let push = PushContext(
+            authStatus: await SalesCentral.pushAuthStatusString()
+        )
+        try await shared.updateContext(UserContext(push: push))
+    }
+
+    /// "production" in a release build, "sandbox" in DEBUG. The host APNs
+    /// uses depends on the provisioning profile, and the two are mutually
+    /// incompatible — sending a sandbox token to the production host
+    /// returns BadDeviceToken.
+    private static func pushEnvironment() -> String {
+        #if DEBUG
+        return "sandbox"
+        #else
+        return "production"
+        #endif
+    }
+
+    /// Read the current UNUserNotificationCenter authorization status as
+    /// the string the backend stores ("authorized" / "denied" / etc.).
+    /// Returns `nil` on platforms without UserNotifications (rare).
+    private static func pushAuthStatusString() async -> String? {
+        #if canImport(UserNotifications)
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized:    return "authorized"
+        case .denied:        return "denied"
+        case .notDetermined: return "notDetermined"
+        case .provisional:   return "provisional"
+        case .ephemeral:     return "ephemeral"
+        @unknown default:    return "notDetermined"
+        }
+        #else
+        return nil
+        #endif
     }
 
     // ------------------------------------------------------------------

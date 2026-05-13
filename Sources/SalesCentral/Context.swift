@@ -15,6 +15,7 @@ public struct UserContext: Encodable, Sendable {
     public var network: NetworkContext?
     public var marketing: MarketingContext?
     public var consent: ConsentContext?
+    public var push: PushContext?
     public var metadata: [String: AnyEncodable]?
 
     public init(
@@ -24,6 +25,7 @@ public struct UserContext: Encodable, Sendable {
         network: NetworkContext? = nil,
         marketing: MarketingContext? = nil,
         consent: ConsentContext? = nil,
+        push: PushContext? = nil,
         metadata: [String: AnyEncodable]? = nil
     ) {
         self.device = device
@@ -32,6 +34,7 @@ public struct UserContext: Encodable, Sendable {
         self.network = network
         self.marketing = marketing
         self.consent = consent
+        self.push = push
         self.metadata = metadata
     }
 
@@ -57,7 +60,33 @@ public struct UserContext: Encodable, Sendable {
         if let v = other.network   { network   = v }
         if let v = other.marketing { marketing = v }
         if let v = other.consent   { consent   = v }
+        if let v = other.push      { push      = v }
         if let v = other.metadata  { metadata  = v }
+    }
+}
+
+/// Push notification context — APNs device token + current
+/// authorization status. Sent up via `SalesCentral.registerPushToken(_:)`
+/// or attached to any `UserContext` you push through `updateContext`.
+public struct PushContext: Encodable, Sendable {
+    public var token: String?         // APNs device token, lowercased hex
+    public var environment: String?   // "production" or "sandbox"
+    public var authStatus: String?    // "authorized" / "denied" / "notDetermined" / ...
+    public var appVersion: String?
+    public var bundleId: String?
+
+    public init(
+        token: String? = nil,
+        environment: String? = nil,
+        authStatus: String? = nil,
+        appVersion: String? = nil,
+        bundleId: String? = nil
+    ) {
+        self.token = token
+        self.environment = environment
+        self.authStatus = authStatus
+        self.appVersion = appVersion
+        self.bundleId = bundleId
     }
 }
 
