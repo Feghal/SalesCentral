@@ -209,6 +209,42 @@ Underlying client (`SalesCentral.shared.…`):
 | `track(_:properties:)` / `trackBatch(_:)` | Free-form analytics events. |
 | `clearUser()` | Local sign-out — wipes the JWT. |
 
+## Push notifications
+
+Two facade methods:
+
+| API | Purpose |
+|---|---|
+| `SalesCentral.registerPushToken(_ deviceToken: Data)` | Hex-encode + send the APNs token + auth status to the backend. Picks `production` / `sandbox` from `#if DEBUG`. |
+| `SalesCentral.unregisterPushToken()` | Refresh stored auth status (e.g. when the user revokes permission). |
+
+iOS plumbing — your code:
+
+```swift
+import SalesCentral
+import UserNotifications
+import UIKit
+
+// 1) Prompt for permission (your call, not the SDK's).
+let granted = (try? await UNUserNotificationCenter.current()
+    .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+if granted { await MainActor.run { UIApplication.shared.registerForRemoteNotifications() } }
+
+// 2) Forward the token in AppDelegate.
+func application(_ application: UIApplication,
+                 didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    Task { try? await SalesCentral.registerPushToken(deviceToken) }
+}
+```
+
+Admin side — once the operator pastes the app's APNs key (Key ID / Team ID / `.p8` private key) into App Detail → Settings → APNs, the **Push** page lets them:
+
+- **Send** ad-hoc notifications, targeting one user / all users / a premium tier / a country / a language / an OS family. Optional **Translate with AI** toggle translates the title + body into every locale present in the audience via one OpenAI call.
+- **Rules** — event-triggered auto-push. When the SDK calls `SalesCentral.shared.track("event_name", properties: [...])`, matching rules send that user a push with template-interpolated copy (`{{user.premium.tier}}`, `{{event.properties.X}}`, etc.).
+- **History** — audit log of every send.
+
+Full walkthrough in [docs/INTEGRATION.md → Push notifications](https://sales.goaichat.app/docs#push-notifications).
+
 ## Capturing context
 
 `UserContext.current()` reads device, app, and locale data from the system.
