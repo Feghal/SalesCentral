@@ -133,4 +133,35 @@ public final class SalesStore: ObservableObject {
     public var isInTrial: Bool   { user?.isInTrial ?? false }
     public var creditBalance: Int { user?.credits.balance ?? 0 }
     public var tier: String      { user?.premium.tier ?? "free" }
+
+    // ------------------------------------------------------------------
+    // MARK: - Paywalls / remote config / experiments
+    // ------------------------------------------------------------------
+
+    /// Fetch a server-defined paywall. Surfaces errors into `lastError`
+    /// and returns nil — convenient for SwiftUI view code.
+    public func paywall(key: String) async -> SalesPaywall? {
+        do { return try await client.paywall(key: key) }
+        catch let err as SalesError { lastError = err; return nil }
+        catch { lastError = .network(error.localizedDescription); return nil }
+    }
+
+    /// Same coerce-or-default behaviour as `SalesClient.remoteConfig`.
+    /// Synchronous — reads the cache populated by the most recent
+    /// bootstrap / refresh.
+    public func remoteConfig<T>(_ key: String, default fallback: T) async -> T {
+        await client.remoteConfig(key, default: fallback)
+    }
+
+    /// Pull the user's active variant assignments.
+    public func activeExperiments() async -> [String: String] {
+        await client.activeExperiments()
+    }
+
+    /// Force-refresh the bundled config from the server.
+    public func refreshConfig() async {
+        do { try await client.refreshConfig() }
+        catch let err as SalesError { lastError = err }
+        catch { lastError = .network(error.localizedDescription) }
+    }
 }

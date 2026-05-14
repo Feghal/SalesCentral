@@ -167,6 +167,98 @@ final class SalesCentralTests: XCTestCase {
         XCTAssertEqual(store.read(), "next-token")
     }
 
+    /// `ensureUser` decodes the new bundled blocks (paywalls /
+    /// remoteConfig / experimentAssignments) and caches them on the
+    /// client so later reads are synchronous.
+    func testEnsureUserAbsorbsConfigBundle() async throws {
+        URLProtocol.registerClass(StubURLProtocol.self)
+        defer { URLProtocol.unregisterClass(StubURLProtocol.self) }
+        let conf = URLSessionConfiguration.ephemeral
+        conf.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: conf)
+
+        StubURLProtocol.next = { _ in
+            let payload: [String: Any] = [
+                "ok": true,
+                "token": "t",
+                "user": [
+                    "id": "u-1",
+                    "premium": ["tier": "free"],
+                    "credits": ["balance": 0],
+                    "entitlements": [:],
+                    "features": [],
+                ],
+                "paywalls": [
+                    [
+                        "key": "main",
+                        "name": "Main paywall",
+                        "productIds": ["com.app.pro.year"],
+                        "data": [
+                            "headline": "Go Pro",
+                            "bullets": ["Unlimited", "Priority support"],
+                            "show_trial": true,
+                            "trial_days": 7,
+                        ],
+                    ],
+                ],
+                "remoteConfig": [
+                    "cta_label": "Continue",
+                    "max_retries": 3,
+                    "feature_x_enabled": true,
+                ],
+                "experimentAssignments": [
+                    "headline_test": "A",
+                ],
+            ]
+            return (
+                HTTPURLResponse(url: URL(string: "https://t")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                try! JSONSerialization.data(withJSONObject: payload)
+            )
+        }
+
+        let store = InMemoryTokenStore()
+        let config = SalesConfig(
+            baseURL: URL(string: "https://sales.test")!,
+            apiKey: "csk_x",
+            tokens: .init(
+                createOrFetchUser:   "AAAAAAAAAAAA",
+                restoreUser:         "BBBBBBBBBBBB",
+                applyPurchases:      "CCCCCCCCCCCC",
+                currentSubscription: "DDDDDDDDDDDD",
+                spendCredits:        "EEEEEEEEEEEE",
+                recordSession:       "FFFFFFFFFFFF",
+                recordEvent:         "GGGGGGGGGGGG"
+            ),
+            tokenStore: store
+        )
+        let client = SalesClient(config, urlSession: session)
+        _ = try await client.ensureUser()
+
+        // Paywall is cached.
+        let pw = try await client.paywall(key: "main")
+        XCTAssertEqual(pw.name, "Main paywall")
+        XCTAssertEqual(pw.productIds, ["com.app.pro.year"])
+        XCTAssertEqual(pw.data["headline"]?.stringValue, "Go Pro")
+        XCTAssertEqual(pw.data["bullets"]?.arrayValue?.count, 2)
+        XCTAssertEqual(pw.data["show_trial"]?.boolValue, true)
+        XCTAssertEqual(pw.data["trial_days"]?.intValue, 7)
+
+        // Remote config typed lookups.
+        let label: String = await client.remoteConfig("cta_label", default: "fallback")
+        XCTAssertEqual(label, "Continue")
+        let retries: Int = await client.remoteConfig("max_retries", default: 99)
+        XCTAssertEqual(retries, 3)
+        let flag: Bool = await client.remoteConfig("feature_x_enabled", default: false)
+        XCTAssertTrue(flag)
+        // Missing key → default.
+        let missing: String = await client.remoteConfig("nonexistent", default: "fallback")
+        XCTAssertEqual(missing, "fallback")
+
+        // Experiment assignments are surfaced.
+        let assignments = await client.activeExperiments()
+        XCTAssertEqual(assignments["headline_test"], "A")
+    }
+
     /// Calling `setUserProperties` with no token bubbles an
     /// `invalidState` error rather than silently creating a fresh user.
     func testSetUserPropertiesRequiresUserToken() async {

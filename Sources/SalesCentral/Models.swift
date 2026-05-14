@@ -33,6 +33,23 @@ public struct SalesUser: Decodable, Sendable, Equatable {
         self.stats = stats
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, premium, credits, entitlements, features, properties, stats
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.premium = try c.decode(PremiumState.self, forKey: .premium)
+        self.credits = try c.decode(Credits.self, forKey: .credits)
+        // Tolerate older / leaner server responses that omit any of
+        // these — the SDK still works with empty defaults.
+        self.entitlements = (try? c.decode([String: Entitlement].self, forKey: .entitlements)) ?? [:]
+        self.features     = (try? c.decode([String].self,             forKey: .features))     ?? []
+        self.properties   = (try? c.decode([String: SalesPropertyValue].self, forKey: .properties)) ?? [:]
+        self.stats        = try? c.decode(Stats.self, forKey: .stats)
+    }
+
     /// Convenience: is the user on any paid tier right now?
     public var isPaid: Bool { premium.isPaid }
 
@@ -126,6 +143,12 @@ public struct RestoreResult: Decodable, Sendable {
     /// Apple SKUs registered for this app in the admin. May be `nil` on
     /// older servers that don't ship the product-prefetch feature.
     public let products: [String]?
+    /// Bundled paywalls / remote config / variant assignments. May be
+    /// `nil` on older servers; the SDK then falls back to whatever it
+    /// already had cached.
+    public let paywalls: [SalesPaywall]?
+    public let remoteConfig: [String: SalesAnyValue]?
+    public let experimentAssignments: [String: String]?
 
     /// Explicit memberwise init so the SDK's local fallback paths
     /// (no-receipts restore, tests) don't have to spell out `products: nil`.
@@ -134,12 +157,18 @@ public struct RestoreResult: Decodable, Sendable {
         user: SalesUser,
         restored: Bool,
         applied: [AppliedReceipt],
-        products: [String]? = nil
+        products: [String]? = nil,
+        paywalls: [SalesPaywall]? = nil,
+        remoteConfig: [String: SalesAnyValue]? = nil,
+        experimentAssignments: [String: String]? = nil
     ) {
         self.token = token
         self.user = user
         self.restored = restored
         self.applied = applied
+        self.paywalls = paywalls
+        self.remoteConfig = remoteConfig
+        self.experimentAssignments = experimentAssignments
         self.products = products
     }
 }

@@ -29,6 +29,18 @@ public actor SalesClient {
     /// hard-coding identifiers.
     private(set) public var configuredProductIDs: [String] = []
 
+    /// Server-defined paywalls, keyed by `key`. Refreshed on every
+    /// ensureUser / updateContext / restorePurchases call.
+    private(set) public var paywallsByKey: [String: SalesPaywall] = [:]
+
+    /// Server-defined remote config, keyed by config key. Same refresh
+    /// cadence as `paywallsByKey`.
+    private(set) public var remoteConfigCache: [String: SalesAnyValue] = [:]
+
+    /// User's current experiment assignments, keyed by experiment.key.
+    /// Stable for the lifetime of each experiment.
+    private(set) public var experimentAssignments: [String: String] = [:]
+
     private var observer: StoreKitObserver?
 
     public init(_ config: SalesConfig, urlSession: URLSession = .shared) {
@@ -54,25 +66,41 @@ public actor SalesClient {
     /// context you passed in.
     @discardableResult
     public func ensureUser(context: UserContext = .current()) async throws -> SalesUser {
-        struct Resp: Decodable {
-            let token: String
-            let user: SalesUser
-            let created: Bool
-            // Apple SKUs registered for this app in the admin. Present on
-            // servers that ship the product-prefetch feature; older servers
-            // omit it and we just keep an empty list.
-            let products: [String]?
-        }
-        let resp: Resp = try await request(
+        let resp: ConfigBundleResponse = try await request(
             .createOrFetchUser,
             method: "POST",
             body: context,
             attachUserToken: config.tokenStore.read() != nil
         )
+        absorbBundle(resp)
+        return resp.user
+    }
+
+    /// Decoded shape of every server response that carries a user state
+    /// bundle (createOrFetchUser, restoreUser). Older servers omit the
+    /// paywall / remote-config / experiment blocks; we default them to
+    /// empty so the SDK doesn't fail to decode.
+    fileprivate struct ConfigBundleResponse: Decodable {
+        let token: String
+        let user: SalesUser
+        let created: Bool?
+        let products: [String]?
+        let paywalls: [SalesPaywall]?
+        let remoteConfig: [String: SalesAnyValue]?
+        let experimentAssignments: [String: String]?
+    }
+
+    /// Common path for every endpoint that returns a config bundle.
+    /// Persists the rotated token, refreshes the in-memory caches.
+    fileprivate func absorbBundle(_ resp: ConfigBundleResponse) {
         config.tokenStore.write(resp.token)
         currentUser = resp.user
         configuredProductIDs = resp.products ?? []
-        return resp.user
+        var pwMap: [String: SalesPaywall] = [:]
+        for pw in resp.paywalls ?? [] { pwMap[pw.key] = pw }
+        paywallsByKey = pwMap
+        remoteConfigCache = resp.remoteConfig ?? [:]
+        experimentAssignments = resp.experimentAssignments ?? [:]
     }
 
     /// Update context on the current user — locale change, ATT prompt
@@ -121,20 +149,13 @@ public actor SalesClient {
             if let v = v { return .value(v) }
             return .delete
         }
-        struct Resp: Decodable {
-            let token: String
-            let user: SalesUser
-            let products: [String]?
-        }
-        let resp: Resp = try await request(
+        let resp: ConfigBundleResponse = try await request(
             .createOrFetchUser,
             method: "POST",
             body: PropertiesUpdateBody(properties: wire),
             attachUserToken: true
         )
-        config.tokenStore.write(resp.token)
-        currentUser = resp.user
-        if let p = resp.products { configuredProductIDs = p }
+        absorbBundle(resp)
         return resp.user
     }
 
@@ -172,6 +193,13 @@ public actor SalesClient {
         config.tokenStore.write(resp.token)
         currentUser = resp.user
         if let ids = resp.products { configuredProductIDs = ids }
+        if let p = resp.paywalls {
+            var map: [String: SalesPaywall] = [:]
+            for pw in p { map[pw.key] = pw }
+            paywallsByKey = map
+        }
+        if let rc = resp.remoteConfig { remoteConfigCache = rc }
+        if let ea = resp.experimentAssignments { experimentAssignments = ea }
         return resp
     }
 
@@ -181,6 +209,55 @@ public actor SalesClient {
     public func clearUser() {
         config.tokenStore.clear()
         currentUser = nil
+        paywallsByKey = [:]
+        remoteConfigCache = [:]
+        experimentAssignments = [:]
+    }
+
+    // ------------------------------------------------------------------
+    // MARK: - Paywalls / remote config / experiments
+    // ------------------------------------------------------------------
+
+    /// Fetch a server-defined paywall by key.
+    ///
+    /// Reads from the cache populated by the most recent `ensureUser` /
+    /// `updateContext` / `restorePurchases`. If the key isn't cached the
+    /// SDK refreshes the bundle (single round-trip via `updateContext`)
+    /// and tries again — that way a paywall added in the admin reaches
+    /// the app without a relaunch.
+    public func paywall(key: String) async throws -> SalesPaywall {
+        if let pw = paywallsByKey[key] { return pw }
+        try await refreshConfig()
+        guard let pw = paywallsByKey[key] else {
+            throw SalesError.invalidState("paywall not found: \(key)")
+        }
+        return pw
+    }
+
+    /// Look up a remote-config value, falling back to `fallback` if the
+    /// key is missing or the value can't be coerced to the same type.
+    /// Synchronous — reads from the in-memory cache.
+    ///
+    /// Supported `T`: `String`, `Int`, `Double`, `Bool`. For richer
+    /// shapes (arrays / nested objects), read `remoteConfigCache`
+    /// directly and pattern-match on `SalesAnyValue`.
+    public func remoteConfig<T>(_ key: String, default fallback: T) -> T {
+        guard let v = remoteConfigCache[key] else { return fallback }
+        return v.coerced(matching: fallback)
+    }
+
+    /// Currently-active experiment assignments, keyed by experiment key.
+    /// Useful when you want to log the user's variant alongside your own
+    /// analytics events.
+    public func activeExperiments() -> [String: String] {
+        experimentAssignments
+    }
+
+    /// Refresh the paywall / remote-config / experiment cache from the
+    /// server. No-op against a logged-out user.
+    public func refreshConfig() async throws {
+        guard config.tokenStore.read() != nil else { return }
+        _ = try await ensureUser()
     }
 
     // ------------------------------------------------------------------
