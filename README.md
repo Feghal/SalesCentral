@@ -164,6 +164,7 @@ all the lower-level operations:
 ```swift
 try await SalesCentral.shared.spendCredits(50, reason: "image_gen")
 try await SalesCentral.shared.recordSession(start: openedAt, end: Date())
+try await SalesCentral.shared.setUserProperties(["email": "alice@example.com", "lifetime_orders": 3])
 await SalesCentral.shared.track("level_completed", properties: ["score": .init(8420)])
 ```
 
@@ -201,6 +202,7 @@ Underlying client (`SalesCentral.shared.…`):
 |---|---|
 | `ensureUser(context:)` | Create-or-fetch the guest user. Stores the JWT. Idempotent. |
 | `updateContext(_:)` | Push new device/locale/marketing/consent context. |
+| `setUserProperty(_:_:)` / `setUserProperties(_:)` | Attach caller-defined attributes (name, email, plan, …) — searched + displayed in the admin. Pass `nil` to delete. |
 | `restorePurchases(receipts:context:)` | Recover a user by signed receipts. Omits `receipts:` to use StoreKit's `currentEntitlements`. |
 | `applyReceipts(_:)` / `applyReceipt(_:)` | Upload signed receipts; server validates + applies effects. Idempotent. |
 | `currentSubscription()` | Source of truth for "is user paid right now?". |
