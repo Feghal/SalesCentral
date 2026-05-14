@@ -15,6 +15,24 @@ follow [semver](https://semver.org).
   `SalesPropertyValue` is `Expressible*Literal` so call sites read naturally:
   `setUserProperties(["email": "alice@example.com", "lifetime_orders": 3])`.
 - `SalesUser.properties` is now part of the response shape.
+- Paywalls, remote config, and experiments (one shared mechanism).
+  - `SalesClient.paywall(key:)` returns a server-defined paywall
+    (`{ productIds, data }`). `data` is `[String: SalesAnyValue]` —
+    your app picks the shape (headline / bullets / image / etc.).
+  - `SalesClient.remoteConfig(_:default:)` — typed sync lookup against
+    the server's remote-config store. Supports `String` / `Int` /
+    `Double` / `Bool`.
+  - `SalesClient.activeExperiments()` — the user's current sticky
+    variant assignments, keyed by experiment.
+  - `SalesClient.refreshConfig()` — force re-fetch of the paywall /
+    remote-config / assignments bundle.
+  - The same blocks ride on every `ensureUser` / `updateContext` /
+    `restorePurchases` response, so first-launch app boot has the
+    full bundle without an extra round-trip.
+  - Variant assignment is server-side, sticky, and audience-gated
+    (country / tier / version / device family / language). Each
+    `Transaction` carries a snapshot of the assignments at purchase
+    time for per-variant conversion reporting.
 
 ### Changed
 - `KeychainTokenStore` now mirrors the JWT to `UserDefaults` as a shadow.

@@ -166,6 +166,10 @@ try await SalesCentral.shared.spendCredits(50, reason: "image_gen")
 try await SalesCentral.shared.recordSession(start: openedAt, end: Date())
 try await SalesCentral.shared.setUserProperties(["email": "alice@example.com", "lifetime_orders": 3])
 await SalesCentral.shared.track("level_completed", properties: ["score": .init(8420)])
+
+// Server-defined paywall + remote-config (variants applied automatically)
+let paywall = try await SalesCentral.shared.paywall(key: "main_paywall")
+let label: String = SalesCentral.shared.remoteConfig("cta_label", default: "Continue")
 ```
 
 ## UIKit / AppKit (no SwiftUI)
@@ -203,6 +207,10 @@ Underlying client (`SalesCentral.shared.…`):
 | `ensureUser(context:)` | Create-or-fetch the guest user. Stores the JWT. Idempotent. |
 | `updateContext(_:)` | Push new device/locale/marketing/consent context. |
 | `setUserProperty(_:_:)` / `setUserProperties(_:)` | Attach caller-defined attributes (name, email, plan, …) — searched + displayed in the admin. Pass `nil` to delete. |
+| `paywall(key:)` | Server-defined `{ productIds, data }`. Async — refreshes the cache on miss. |
+| `remoteConfig(_:default:)` | Typed lookup (`String` / `Int` / `Double` / `Bool`) with fallback. Synchronous; reads the cache. |
+| `activeExperiments()` | Map of `experimentKey → variantName` for the current user. |
+| `refreshConfig()` | Re-pull paywalls + remote-config + assignments from the server. |
 | `restorePurchases(receipts:context:)` | Recover a user by signed receipts. Omits `receipts:` to use StoreKit's `currentEntitlements`. |
 | `applyReceipts(_:)` / `applyReceipt(_:)` | Upload signed receipts; server validates + applies effects. Idempotent. |
 | `currentSubscription()` | Source of truth for "is user paid right now?". |
