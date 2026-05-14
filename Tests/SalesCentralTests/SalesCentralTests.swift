@@ -85,4 +85,153 @@ final class SalesCentralTests: XCTestCase {
         a.merge(b)
         XCTAssertEqual(a.locale?.language, "ja")
     }
+
+    /// `SalesClient.setUserProperties` posts the right wire shape to the
+    /// `createOrFetchUser` endpoint: a body of `{ "properties": {...} }`
+    /// where string / number / bool / null are each encoded correctly.
+    /// Integer-valued doubles encode as JSON integers (cosmetic, but the
+    /// admin renders them raw).
+    func testSetUserPropertiesPostsExpectedJSON() async throws {
+        // Stub URLSession that records the request body and returns a
+        // minimal success response.
+        URLProtocol.registerClass(StubURLProtocol.self)
+        defer { URLProtocol.unregisterClass(StubURLProtocol.self) }
+        let conf = URLSessionConfiguration.ephemeral
+        conf.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: conf)
+
+        StubURLProtocol.next = { _ in
+            let payload: [String: Any] = [
+                "ok": true,
+                "token": "next-token",
+                "user": [
+                    "id": "u-1",
+                    "premium": ["tier": "free"],
+                    "credits": ["balance": 0],
+                    "entitlements": [:],
+                    "features": [],
+                    "properties": [
+                        "email": "alice@example.com",
+                        "lifetime_orders": 3,
+                        "wants_emails": true,
+                    ],
+                ],
+            ]
+            return (
+                HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                try! JSONSerialization.data(withJSONObject: payload)
+            )
+        }
+
+        let store = InMemoryTokenStore(initial: "starting-token")
+        let config = SalesConfig(
+            baseURL: URL(string: "https://sales.test")!,
+            apiKey: "csk_x",
+            tokens: .init(
+                createOrFetchUser:   "AAAAAAAAAAAA",
+                restoreUser:         "BBBBBBBBBBBB",
+                applyPurchases:      "CCCCCCCCCCCC",
+                currentSubscription: "DDDDDDDDDDDD",
+                spendCredits:        "EEEEEEEEEEEE",
+                recordSession:       "FFFFFFFFFFFF",
+                recordEvent:         "GGGGGGGGGGGG"
+            ),
+            tokenStore: store
+        )
+        let client = SalesClient(config, urlSession: session)
+
+        let user = try await client.setUserProperties([
+            "email": "alice@example.com",
+            "lifetime_orders": 3,
+            "wants_emails": true,
+            "old_key": nil,                  // delete
+        ])
+
+        // Body assertions: the recorded request must include each value
+        // encoded in its natural JSON form, plus a JSON null for the
+        // delete sentinel.
+        let body = try XCTUnwrap(StubURLProtocol.lastBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let props = try XCTUnwrap(json?["properties"] as? [String: Any])
+        XCTAssertEqual(props["email"]           as? String, "alice@example.com")
+        XCTAssertEqual(props["lifetime_orders"] as? Int,    3)
+        XCTAssertEqual(props["wants_emails"]    as? Bool,   true)
+        XCTAssertTrue(props["old_key"] is NSNull)
+
+        // The decoded user surfaces the properties dict via the typed enum.
+        XCTAssertEqual(user.properties["email"], .string("alice@example.com"))
+        XCTAssertEqual(user.properties["lifetime_orders"], .number(3))
+        XCTAssertEqual(user.properties["wants_emails"], .bool(true))
+
+        // And the rotated token was persisted.
+        XCTAssertEqual(store.read(), "next-token")
+    }
+
+    /// Calling `setUserProperties` with no token bubbles an
+    /// `invalidState` error rather than silently creating a fresh user.
+    func testSetUserPropertiesRequiresUserToken() async {
+        let store = InMemoryTokenStore()   // no token
+        let config = SalesConfig(
+            baseURL: URL(string: "https://sales.test")!,
+            apiKey: "csk_x",
+            tokens: .init(
+                createOrFetchUser:   "AAAAAAAAAAAA",
+                restoreUser:         "BBBBBBBBBBBB",
+                applyPurchases:      "CCCCCCCCCCCC",
+                currentSubscription: "DDDDDDDDDDDD",
+                spendCredits:        "EEEEEEEEEEEE",
+                recordSession:       "FFFFFFFFFFFF",
+                recordEvent:         "GGGGGGGGGGGG"
+            ),
+            tokenStore: store
+        )
+        let client = SalesClient(config)
+        do {
+            _ = try await client.setUserProperties(["email": "alice@example.com"])
+            XCTFail("expected invalidState error")
+        } catch let SalesError.invalidState(reason) {
+            XCTAssertTrue(reason.contains("no user token"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+}
+
+// MARK: - Stub URLProtocol
+
+private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var next: ((URLRequest) -> (HTTPURLResponse, Data))?
+    nonisolated(unsafe) static var lastBody: Data?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        // URLProtocol drops httpBody when the request has been adapted to a
+        // stream; pull it from httpBodyStream as a fallback.
+        if let body = request.httpBody {
+            Self.lastBody = body
+        } else if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+            defer { buf.deallocate() }
+            while stream.hasBytesAvailable {
+                let n = stream.read(buf, maxLength: 4096)
+                if n <= 0 { break }
+                data.append(buf, count: n)
+            }
+            Self.lastBody = data
+        }
+        let (resp, data) = Self.next?(request) ?? (
+            HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!,
+            Data()
+        )
+        client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

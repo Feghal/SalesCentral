@@ -86,6 +86,58 @@ public actor SalesClient {
         return try await ensureUser(context: context)
     }
 
+    /// Set a single user property — caller-defined attributes like name,
+    /// email, plan_intent, etc. that the admin can search and display.
+    /// Pass `nil` to delete the key.
+    ///
+    /// Keys must match `[A-Za-z0-9_.-]{1,64}`; values must be strings
+    /// (≤1024 chars), finite numbers, or booleans. Out-of-spec entries
+    /// are silently dropped server-side — the SDK doesn't pre-validate
+    /// so that future server-side relaxations don't require a new SDK.
+    @discardableResult
+    public func setUserProperty(
+        _ key: String,
+        _ value: SalesPropertyValue?
+    ) async throws -> SalesUser {
+        try await setUserProperties([key: value])
+    }
+
+    /// Set multiple user properties in one round-trip. `nil` values
+    /// delete their key; non-nil values upsert.
+    @discardableResult
+    public func setUserProperties(
+        _ properties: [String: SalesPropertyValue?]
+    ) async throws -> SalesUser {
+        guard config.tokenStore.read() != nil else {
+            throw SalesError.invalidState("no user token — call ensureUser first")
+        }
+        guard !properties.isEmpty else {
+            // Nothing to update — surface the current user without a
+            // round-trip. Mirrors the no-op behaviour callers expect.
+            if let u = currentUser { return u }
+            return try await ensureUser()
+        }
+        let wire = properties.mapValues { v -> PropertyDelta in
+            if let v = v { return .value(v) }
+            return .delete
+        }
+        struct Resp: Decodable {
+            let token: String
+            let user: SalesUser
+            let products: [String]?
+        }
+        let resp: Resp = try await request(
+            .createOrFetchUser,
+            method: "POST",
+            body: PropertiesUpdateBody(properties: wire),
+            attachUserToken: true
+        )
+        config.tokenStore.write(resp.token)
+        currentUser = resp.user
+        if let p = resp.products { configuredProductIDs = p }
+        return resp.user
+    }
+
     /// Recover the user that owns the given Apple receipt(s). Pulls the
     /// current StoreKit entitlements automatically when `receipts` is omitted.
     @discardableResult

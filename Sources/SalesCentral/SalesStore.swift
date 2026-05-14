@@ -90,11 +90,35 @@ public final class SalesStore: ObservableObject {
             u = SalesUser(
                 id: u.id, premium: u.premium,
                 credits: Credits(balance: balance),
-                entitlements: u.entitlements, features: u.features, stats: u.stats
+                entitlements: u.entitlements, features: u.features,
+                properties: u.properties, stats: u.stats
             )
             user = u
         }
         return balance
+    }
+
+    /// Set a single user property. See `SalesClient.setUserProperty`.
+    public func setUserProperty(_ key: String, _ value: SalesPropertyValue?) async {
+        do {
+            user = try await client.setUserProperty(key, value)
+        } catch let err as SalesError {
+            lastError = err
+        } catch {
+            lastError = .network(error.localizedDescription)
+        }
+    }
+
+    /// Set multiple user properties in one round-trip. See
+    /// `SalesClient.setUserProperties`.
+    public func setUserProperties(_ properties: [String: SalesPropertyValue?]) async {
+        do {
+            user = try await client.setUserProperties(properties)
+        } catch let err as SalesError {
+            lastError = err
+        } catch {
+            lastError = .network(error.localizedDescription)
+        }
     }
 
     public func track(_ name: String, properties: [String: AnyEncodable] = [:]) async {

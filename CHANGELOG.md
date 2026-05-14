@@ -6,6 +6,16 @@ follow [semver](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+- `SalesClient.setUserProperty(_:_:)` and `setUserProperties(_:)` — attach
+  caller-defined attributes (name, email, plan_intent, …) to the current
+  user. The admin's Users list searches across these full-text and the
+  user detail drawer renders them as a typed key/value card. Values are
+  scalar (`string` / `number` / `bool`); pass `nil` to delete a key.
+  `SalesPropertyValue` is `Expressible*Literal` so call sites read naturally:
+  `setUserProperties(["email": "alice@example.com", "lifetime_orders": 3])`.
+- `SalesUser.properties` is now part of the response shape.
+
 ### Changed
 - `KeychainTokenStore` now mirrors the JWT to `UserDefaults` as a shadow.
   Keychain remains the primary; if a read misses (most likely after an

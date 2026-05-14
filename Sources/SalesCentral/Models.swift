@@ -9,6 +9,10 @@ public struct SalesUser: Decodable, Sendable, Equatable {
     public let credits: Credits
     public let entitlements: [String: Entitlement]
     public let features: [String]
+    /// Caller-defined user properties — see `SalesClient.setUserProperty`.
+    /// Values are scalar (string / number / bool). Empty when the user
+    /// has none set.
+    public let properties: [String: SalesPropertyValue]
     public let stats: Stats?
 
     public init(
@@ -17,6 +21,7 @@ public struct SalesUser: Decodable, Sendable, Equatable {
         credits: Credits,
         entitlements: [String: Entitlement] = [:],
         features: [String] = [],
+        properties: [String: SalesPropertyValue] = [:],
         stats: Stats? = nil
     ) {
         self.id = id
@@ -24,6 +29,7 @@ public struct SalesUser: Decodable, Sendable, Equatable {
         self.credits = credits
         self.entitlements = entitlements
         self.features = features
+        self.properties = properties
         self.stats = stats
     }
 
@@ -32,6 +38,21 @@ public struct SalesUser: Decodable, Sendable, Equatable {
 
     /// Convenience: is the user currently in a free trial?
     public var isInTrial: Bool { premium.isTrial ?? false }
+}
+
+// MARK: - SalesPropertyValue Decodable
+
+extension SalesPropertyValue: Decodable {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let s = try? c.decode(String.self) { self = .string(s); return }
+        if let b = try? c.decode(Bool.self)   { self = .bool(b);   return }
+        if let n = try? c.decode(Double.self) { self = .number(n); return }
+        throw DecodingError.dataCorruptedError(
+            in: c,
+            debugDescription: "SalesPropertyValue must be a string, number, or boolean"
+        )
+    }
 }
 
 public struct PremiumState: Decodable, Sendable, Equatable {
