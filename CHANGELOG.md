@@ -6,6 +6,14 @@ follow [semver](https://semver.org).
 
 ## [Unreleased]
 
+### Changed
+- `KeychainTokenStore` now mirrors the JWT to `UserDefaults` as a shadow.
+  Keychain remains the primary; if a read misses (most likely after an
+  App Store Connect app transfer changes the Team ID), the SDK falls back
+  to the UserDefaults shadow and self-heals the keychain entry. Free
+  guest users that haven't purchased anything keep their identity across
+  app transfers; paying users continue to rely on `restorePurchases()`.
+
 ## [1.0.2] - 2026-05-11
 
 ### Added

@@ -33,6 +33,43 @@ final class SalesCentralTests: XCTestCase {
         XCTAssertNil(store.read())
     }
 
+    /// `KeychainTokenStore` shadows the JWT in UserDefaults so an app
+    /// transfer (which leaves the new build unable to read the prior
+    /// keychain entries) can still recover the user. Simulate the transfer
+    /// by wiping the keychain underneath the store and confirming the read
+    /// recovers from UserDefaults, then self-heals on next access.
+    func testKeychainTokenStoreFallsBackToDefaults() throws {
+        let suiteName = "SalesCentralTests.keychainFallback.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let service = "central.sales.test.\(UUID().uuidString)"
+
+        let store = KeychainTokenStore(service: service, defaults: defaults)
+        store.clear()
+        store.write("eyJ-real")
+        XCTAssertEqual(store.read(), "eyJ-real")
+
+        // Simulate post-transfer keychain blackout: drop only the keychain
+        // entry, leave the UserDefaults shadow alone.
+        let q: [String: Any] = [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "user_token",
+        ]
+        SecItemDelete(q as CFDictionary)
+
+        // The fallback path returns the shadowed value.
+        XCTAssertEqual(store.read(), "eyJ-real")
+
+        // And self-healed back into the keychain: re-delete only the
+        // defaults shadow and verify the keychain copy now satisfies reads.
+        defaults.removeObject(forKey: "\(service).user_token")
+        XCTAssertEqual(store.read(), "eyJ-real")
+
+        store.clear()
+        XCTAssertNil(store.read())
+    }
+
     func testContextCurrentDoesNotCrash() {
         let ctx = UserContext.current()
         // We don't assert specifics — the contents depend on the host

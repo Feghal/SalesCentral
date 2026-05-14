@@ -297,9 +297,12 @@ do {
 
 ## Custom token storage
 
-Default `TokenStore` is the system Keychain. For tests or per-account
-isolation, build a `SalesConfig` yourself and inject it via
-`SalesCentral.configure(_:)` before `SalesCentral.start()` runs:
+Default `TokenStore` is `KeychainTokenStore` — system Keychain (primary)
+with a `UserDefaults` shadow that the SDK falls back to if the Keychain
+read misses (covers the App Store Connect app-transfer case where the
+new Team ID can't decrypt the prior entries). Override for tests or
+per-account isolation by building a `SalesConfig` yourself and injecting
+it via `SalesCentral.configure(_:)` before `SalesCentral.start()` runs:
 
 ```swift
 let base = SalesConfig.fromBundle()
