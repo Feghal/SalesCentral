@@ -87,9 +87,14 @@ public enum SalesCentral {
     /// internal `_bootstrapped` flag and subsequent calls are no-ops.
     public static func start() async {
         ensureConfigured()
-        if _bootstrapped { return }
+        if _bootstrapped {
+            SalesLog.debug(.sdk, "start() called again — bootstrap already complete, no-op")
+            return
+        }
         _bootstrapped = true
+        SalesLog.info(.sdk, "start() — bootstrapping…")
         await store.bootstrap()
+        SalesLog.info(.sdk, "start() — bootstrap complete; prefetching StoreKit products")
         // Right after bootstrap, the SalesClient knows which Apple SKUs the
         // admin has registered for this app (returned from createOrFetchUser).
         // Kick off the StoreKit lookup in the background — `loadProducts()`
@@ -105,15 +110,20 @@ public enum SalesCentral {
     /// First call wins; later calls are ignored. Use `reset()` first to
     /// re-configure mid-process.
     public static func configure(_ config: SalesConfig) {
-        guard _client == nil else { return }
+        guard _client == nil else {
+            SalesLog.debug(.sdk, "configure(_:) ignored — already configured")
+            return
+        }
         let c = SalesClient(config)
         _client = c
         _store = SalesStore(client: c)
+        SalesLog.info(.sdk, "configured for baseURL=\(config.baseURL.absoluteString)")
     }
 
     /// Drop the configured client (test hook). After `reset()`, the next
     /// access to `store` / `shared` / `start()` re-reads the bundle.
     public static func reset() {
+        SalesLog.debug(.sdk, "reset() — clearing configuration")
         _productsTask?.cancel()
         _productsTask = nil
         _client = nil
@@ -145,6 +155,19 @@ public enum SalesCentral {
     public static var isConfigured: Bool { _client != nil }
 
     // ------------------------------------------------------------------
+    // MARK: - Logging
+    // ------------------------------------------------------------------
+
+    /// Toggle SDK logging. Verbose by default in DEBUG; silent in release.
+    /// Lines route through `os.Logger` under the subsystem
+    /// `com.salescentral.sdk` — open Console.app and filter on that
+    /// subsystem to see the full SDK conversation.
+    public static var loggingEnabled: Bool {
+        get { SalesLog.isEnabled }
+        set { SalesLog.isEnabled = newValue }
+    }
+
+    // ------------------------------------------------------------------
     // MARK: - Products
     // ------------------------------------------------------------------
 
@@ -172,12 +195,22 @@ public enum SalesCentral {
         // This makes the call usable even from app delegates that haven't
         // awaited start() yet.
         if _productsTask == nil {
+            SalesLog.debug(.store, "loadProducts() — no prefetch in flight, bootstrapping on demand")
             if !_bootstrapped { await start() }                 // populates _productsTask
             if _productsTask == nil {
                 _productsTask = Task { try await fetchProductsFromStoreKit() }
             }
+        } else {
+            SalesLog.debug(.store, "loadProducts() — joining the prefetch task")
         }
-        return try await _productsTask!.value
+        do {
+            let products = try await _productsTask!.value
+            SalesLog.info(.store, "loadProducts() returned \(products.count) product(s)")
+            return products
+        } catch {
+            SalesLog.error(.store, "loadProducts() failed: \(error.localizedDescription)")
+            throw error
+        }
     }
 
     /// Force a refetch of the registered SKUs + StoreKit lookup. Use
@@ -186,9 +219,17 @@ public enum SalesCentral {
     @discardableResult
     public static func reloadProducts() async throws -> [Product] {
         ensureConfigured()
+        SalesLog.info(.store, "reloadProducts() — refetching SKUs + StoreKit lookup")
         let task = Task { try await fetchProductsFromStoreKit(forceRefreshIDs: true) }
         _productsTask = task
-        return try await task.value
+        do {
+            let products = try await task.value
+            SalesLog.info(.store, "reloadProducts() returned \(products.count) product(s)")
+            return products
+        } catch {
+            SalesLog.error(.store, "reloadProducts() failed: \(error.localizedDescription)")
+            throw error
+        }
     }
 
     /// Convenience: look up a single registered product by SKU. Returns
@@ -215,24 +256,31 @@ public enum SalesCentral {
     @discardableResult
     public static func purchase(_ product: Product) async throws -> PurchaseResult {
         ensureConfigured()
+        SalesLog.info(.store, "purchase(\(product.id)) — opening StoreKit dialog")
         let result = try await product.purchase()
         switch result {
         case .success(let verification):
             switch verification {
             case .verified(let txn):
+                SalesLog.info(.store, "purchase(\(product.id)) — verified txn=\(txn.id), uploading receipt")
                 let jws = String(decoding: txn.jsonRepresentation, as: UTF8.self)
                 let resp = try await shared.applyReceipt(jws)
                 await txn.finish()
                 await store.syncAfterPurchase(user: resp.user)
+                SalesLog.info(.store, "purchase(\(product.id)) — applied \(resp.applied.count) effect(s)")
                 return .success(applied: resp.applied)
             case .unverified(_, let error):
+                SalesLog.warn(.store, "purchase(\(product.id)) — UNVERIFIED: \(error.localizedDescription)")
                 return .unverified(reason: error.localizedDescription)
             }
         case .userCancelled:
+            SalesLog.info(.store, "purchase(\(product.id)) — user cancelled")
             return .userCancelled
         case .pending:
+            SalesLog.info(.store, "purchase(\(product.id)) — pending (Ask to Buy / SCA)")
             return .pending
         @unknown default:
+            SalesLog.warn(.store, "purchase(\(product.id)) — unknown StoreKit result, treating as cancelled")
             return .userCancelled
         }
     }
@@ -284,6 +332,7 @@ public enum SalesCentral {
             appVersion: info["CFBundleShortVersionString"] as? String,
             bundleId: Bundle.main.bundleIdentifier
         )
+        SalesLog.info(.push, "registerPushToken — env=\(env) auth=\(auth ?? "nil") token=\(hex.prefix(8))…")
         try await shared.updateContext(UserContext(push: push))
     }
 
@@ -293,6 +342,7 @@ public enum SalesCentral {
     /// opts back in.
     public static func unregisterPushToken() async throws {
         ensureConfigured()
+        SalesLog.info(.push, "unregisterPushToken")
         let push = PushContext(
             authStatus: await SalesCentral.pushAuthStatusString()
         )
@@ -347,11 +397,60 @@ public enum SalesCentral {
     /// product in the admin shows up without a relaunch.
     private static func fetchProductsFromStoreKit(forceRefreshIDs: Bool = false) async throws -> [Product] {
         if forceRefreshIDs {
+            SalesLog.debug(.store, "fetchProductsFromStoreKit — forcing ensureUser to refresh SKU list")
             _ = try await shared.ensureUser()
         }
         let ids = await shared.configuredProductIDs
-        guard !ids.isEmpty else { return [] }
-        return try await Product.products(for: ids)
+        SalesLog.debug(.store, "fetchProductsFromStoreKit — asking StoreKit for \(ids.count) SKU(s): \(ids.joined(separator: ", "))")
+        guard !ids.isEmpty else {
+            SalesLog.warn(.store, "fetchProductsFromStoreKit — no SKUs registered for this app in the admin")
+            return []
+        }
+        let products = try await Product.products(for: ids)
+        if products.count < ids.count {
+            let missing = Set(ids).subtracting(products.map { $0.id })
+            SalesLog.warn(.store, "fetchProductsFromStoreKit — Apple did not return: \(missing.sorted().joined(separator: ", "))")
+        }
+        return products
+    }
+}
+
+// ----------------------------------------------------------------------
+// MARK: - SalesPaywall extensions
+// ----------------------------------------------------------------------
+
+extension SalesPaywall {
+
+    /// Load the StoreKit `Product`s for this paywall in one call.
+    ///
+    /// Equivalent to `SalesCentral.loadProducts().filter` + a reorder, but
+    /// folded into one ergonomic call. The SDK already prefetched every
+    /// registered product during `start()` (or on first `loadProducts()`
+    /// access), so this is just an in-memory filter most of the time — no
+    /// extra StoreKit round-trip per paywall.
+    ///
+    /// The returned array preserves `paywall.productIds` order so the
+    /// operator's chosen display order is honoured. SKUs the admin lists
+    /// that Apple doesn't recognise are silently dropped from the result;
+    /// inspect `paywall.productIds.count` vs `products.count` if that
+    /// mismatch matters to you.
+    ///
+    /// ```swift
+    /// let paywall  = try await SalesCentral.shared.paywall(key: "main")
+    /// let products = try await paywall.loadProducts()    // [Product]
+    /// ```
+    @MainActor
+    public func loadProducts() async throws -> [Product] {
+        SalesLog.debug(.paywall, "paywall.loadProducts() — \(key) wants \(productIds.count) SKU(s)")
+        let all = try await SalesCentral.loadProducts()
+        let byId = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+        let products = productIds.compactMap { byId[$0] }
+        if products.count < productIds.count {
+            let missing = productIds.filter { byId[$0] == nil }
+            SalesLog.warn(.paywall, "paywall.loadProducts() — \(key) missing \(missing.count) SKU(s): \(missing.joined(separator: ", "))")
+        }
+        SalesLog.info(.paywall, "paywall.loadProducts() — \(key) resolved \(products.count) product(s)")
+        return products
     }
 }
 

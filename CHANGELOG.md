@@ -7,6 +7,17 @@ follow [semver](https://semver.org).
 ## [Unreleased]
 
 ### Added
+- `SalesPaywall.loadProducts()` — one-call StoreKit product loader for a
+  paywall. Equivalent to `SalesCentral.loadProducts().filter` against
+  `paywall.productIds`, but folds the ordering and the missing-SKU warning
+  into a single ergonomic call. Shares the same prefetch cache as the
+  top-level loader so calling it from multiple paywall views is free after
+  first launch.
+- SDK-wide verbose logging via `os.Logger` under the subsystem
+  `com.salescentral.sdk` (categories: `sdk`, `http`, `store`, `paywall`,
+  `push`, `session`, `observer`). Enabled in DEBUG, off in release; toggle
+  anywhere with `SalesCentral.loggingEnabled = true`. Open Console.app and
+  filter on the subsystem to watch boot → HTTP → StoreKit → purchase live.
 - `SalesClient.setUserProperty(_:_:)` and `setUserProperties(_:)` — attach
   caller-defined attributes (name, email, plan_intent, …) to the current
   user. The admin's Users list searches across these full-text and the

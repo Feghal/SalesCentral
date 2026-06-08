@@ -168,8 +168,20 @@ try await SalesCentral.shared.setUserProperties(["email": "alice@example.com", "
 await SalesCentral.shared.track("level_completed", properties: ["score": .init(8420)])
 
 // Server-defined paywall + remote-config (variants applied automatically)
-let paywall = try await SalesCentral.shared.paywall(key: "main_paywall")
+let paywall  = try await SalesCentral.shared.paywall(key: "main_paywall")
+let products = try await paywall.loadProducts()   // [Product] in admin order
 let label: String = SalesCentral.shared.remoteConfig("cta_label", default: "Continue")
+```
+
+## Logging
+
+The SDK logs every meaningful step through Apple's unified logging system
+under the subsystem `com.salescentral.sdk`. Enabled in DEBUG, off in
+release. Open Console.app and filter on `subsystem:com.salescentral.sdk`
+to watch boot → HTTP → StoreKit → purchase live, or flip it on in release:
+
+```swift
+SalesCentral.loggingEnabled = true
 ```
 
 ## UIKit / AppKit (no SwiftUI)
@@ -196,6 +208,8 @@ Top-level facade (`SalesCentral.…`):
 |---|---|
 | `start()` | One-shot config + bootstrap. Reads `SalesCentral.plist`, ensures the user, wires up observers. |
 | `loadProducts()` / `loadProduct(_:)` / `reloadProducts()` | StoreKit products for the SKUs the admin registered. No identifiers in app code. |
+| `paywall.loadProducts()` | StoreKit products for one paywall, filtered + ordered by `paywall.productIds`. |
+| `loggingEnabled` | Toggle SDK logging (`os.Logger`, subsystem `com.salescentral.sdk`). |
 | `purchase(_:)` / `purchase(productID:)` | End-to-end purchase: dialog → verify → upload → finish → store refresh. |
 | `store` | Shared `SalesStore` for SwiftUI `.environmentObject(...)`. |
 | `shared` | Underlying `SalesClient` actor for direct API calls. |

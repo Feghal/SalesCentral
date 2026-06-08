@@ -101,6 +101,7 @@ public actor SalesClient {
         paywallsByKey = pwMap
         remoteConfigCache = resp.remoteConfig ?? [:]
         experimentAssignments = resp.experimentAssignments ?? [:]
+        SalesLog.debug(.sdk, "absorbed bundle — user=\(resp.user.id) products=\(configuredProductIDs.count) paywalls=\(pwMap.count) remoteConfig=\(remoteConfigCache.count) experiments=\(experimentAssignments.count)")
     }
 
     /// Update context on the current user — locale change, ATT prompt
@@ -226,11 +227,17 @@ public actor SalesClient {
     /// and tries again — that way a paywall added in the admin reaches
     /// the app without a relaunch.
     public func paywall(key: String) async throws -> SalesPaywall {
-        if let pw = paywallsByKey[key] { return pw }
+        if let pw = paywallsByKey[key] {
+            SalesLog.debug(.paywall, "paywall(\(key)) — cache hit, \(pw.productIds.count) product(s)")
+            return pw
+        }
+        SalesLog.info(.paywall, "paywall(\(key)) — cache miss, refreshing bundle")
         try await refreshConfig()
         guard let pw = paywallsByKey[key] else {
+            SalesLog.warn(.paywall, "paywall(\(key)) — still not found after refresh")
             throw SalesError.invalidState("paywall not found: \(key)")
         }
+        SalesLog.info(.paywall, "paywall(\(key)) — found after refresh, \(pw.productIds.count) product(s)")
         return pw
     }
 
@@ -360,13 +367,18 @@ public actor SalesClient {
     /// Start watching `Transaction.updates` for new purchases / renewals
     /// and auto-upload them. Call once on app boot. Idempotent.
     public func startObservingTransactions() {
-        guard observer == nil else { return }
+        guard observer == nil else {
+            SalesLog.debug(.observer, "startObservingTransactions() — already running, no-op")
+            return
+        }
+        SalesLog.info(.observer, "startObservingTransactions() — listening on Transaction.updates")
         observer = StoreKitObserver(client: self)
         observer?.start()
     }
 
     /// Stop the auto-uploader. Rarely needed.
     public func stopObservingTransactions() {
+        SalesLog.debug(.observer, "stopObservingTransactions()")
         observer?.stop()
         observer = nil
     }
@@ -385,7 +397,8 @@ public actor SalesClient {
         body: B?,
         attachUserToken: Bool
     ) async throws -> T {
-        var req = URLRequest(url: config.url(for: endpoint))
+        let url = config.url(for: endpoint)
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue(config.apiKey, forHTTPHeaderField: "x-app-key")
         if attachUserToken, let token = config.tokenStore.read() {
@@ -396,26 +409,34 @@ public actor SalesClient {
             req.httpBody = try encoder.encode(body)
         }
 
+        SalesLog.debug(.http, "→ \(method) \(endpoint) \(url.path)")
+        let start = Date()
         let (data, resp): (Data, URLResponse)
         do {
             (data, resp) = try await session.data(for: req)
         } catch {
+            SalesLog.error(.http, "✗ \(method) \(endpoint) network: \(error.localizedDescription)")
             throw SalesError.network(error.localizedDescription)
         }
         guard let http = resp as? HTTPURLResponse else {
+            SalesLog.error(.http, "✗ \(method) \(endpoint) no HTTP response")
             throw SalesError.network("no HTTP response")
         }
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
         if !(200..<300 ~= http.statusCode) {
             let err = (try? decoder.decode(APIError.self, from: data))
                 ?? APIError(error: "http_\(http.statusCode)", message: nil)
+            SalesLog.warn(.http, "← \(http.statusCode) \(endpoint) (\(ms)ms) error=\(err.error)\(err.message.map { " message=\($0)" } ?? "")")
             // 401 → user token is invalid. Wipe it so the next call starts
             // fresh via /users instead of looping on bad credentials.
             if http.statusCode == 401 { config.tokenStore.clear() }
             throw SalesError.http(status: http.statusCode, code: err.error, message: err.message)
         }
+        SalesLog.debug(.http, "← \(http.statusCode) \(endpoint) (\(ms)ms, \(data.count) bytes)")
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
+            SalesLog.error(.http, "✗ \(method) \(endpoint) decode: \(error.localizedDescription)")
             throw SalesError.decoding(error.localizedDescription)
         }
     }
