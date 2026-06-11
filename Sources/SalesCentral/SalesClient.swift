@@ -52,7 +52,21 @@ public actor SalesClient {
         self.encoder = enc
 
         let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601
+        // The server serializes dates via JSON.stringify, which emits
+        // fractional seconds ("2026-06-11T08:15:30.123Z"). Plain `.iso8601`
+        // rejects those, so try fractional first, then fall back.
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        dec.dateDecodingStrategy = .custom { decoder in
+            let c = try decoder.singleValueContainer()
+            let s = try c.decode(String.self)
+            if let d = fractional.date(from: s) ?? plain.date(from: s) { return d }
+            throw DecodingError.dataCorruptedError(
+                in: c, debugDescription: "Unrecognized ISO8601 date: \(s)"
+            )
+        }
         self.decoder = dec
     }
 
@@ -304,17 +318,22 @@ public actor SalesClient {
     // ------------------------------------------------------------------
 
     /// Debit `amount` credits. Throws `SalesError.http(status: 402, …)`
-    /// with `code == "insufficient_credits"` when the balance is too low —
-    /// surface a paywall in that branch.
+    /// with `code == "insufficient_credits"` when the spendable balance is
+    /// too low — surface a paywall in that branch. Note the user may still
+    /// have `locked` credits on a drip schedule; re-fetch the user (or check
+    /// `credits.nextUnlockAt`) to show "more credits unlock at <time>"
+    /// instead of a bare paywall.
+    ///
+    /// Returns the full post-spend `Credits` state (spendable balance plus
+    /// any locked drip pool).
     @discardableResult
-    public func spendCredits(_ amount: Int, reason: String) async throws -> Int {
+    public func spendCredits(_ amount: Int, reason: String) async throws -> Credits {
         struct Body: Encodable { let amount: Int; let reason: String }
-        struct Resp: Decodable { let balance: Int }
-        let resp: Resp = try await request(
+        let credits: Credits = try await request(
             .spendCredits, method: "POST",
             body: Body(amount: amount, reason: reason), attachUserToken: true
         )
-        return resp.balance
+        return credits
     }
 
     // ------------------------------------------------------------------

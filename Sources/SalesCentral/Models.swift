@@ -83,7 +83,32 @@ public struct PremiumState: Decodable, Sendable, Equatable {
 }
 
 public struct Credits: Decodable, Sendable, Equatable {
+    /// Spendable right now.
     public let balance: Int
+    /// Purchased but still locked — released on the product's drip schedule
+    /// (e.g. 100/day). 0 when the product grants everything at once.
+    public let locked: Int
+    /// When the next locked tranche becomes spendable. nil when nothing is
+    /// locked.
+    public let nextUnlockAt: Date?
+
+    public init(balance: Int, locked: Int = 0, nextUnlockAt: Date? = nil) {
+        self.balance = balance
+        self.locked = locked
+        self.nextUnlockAt = nextUnlockAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case balance, locked, nextUnlockAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.balance = try c.decode(Int.self, forKey: .balance)
+        // Tolerate older servers that only send `balance`.
+        self.locked = (try? c.decode(Int.self, forKey: .locked)) ?? 0
+        self.nextUnlockAt = try? c.decode(Date.self, forKey: .nextUnlockAt)
+    }
 }
 
 public struct Entitlement: Decodable, Sendable, Equatable {

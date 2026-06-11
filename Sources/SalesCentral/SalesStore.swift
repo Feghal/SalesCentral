@@ -83,19 +83,19 @@ public final class SalesStore: ObservableObject {
     }
 
     @discardableResult
-    public func spendCredits(_ amount: Int, reason: String) async throws -> Int {
-        let balance = try await client.spendCredits(amount, reason: reason)
+    public func spendCredits(_ amount: Int, reason: String) async throws -> Credits {
+        let credits = try await client.spendCredits(amount, reason: reason)
         // Mutate `user` so views update without a re-fetch.
         if var u = user {
             u = SalesUser(
                 id: u.id, premium: u.premium,
-                credits: Credits(balance: balance),
+                credits: credits,
                 entitlements: u.entitlements, features: u.features,
                 properties: u.properties, stats: u.stats
             )
             user = u
         }
-        return balance
+        return credits
     }
 
     /// Set a single user property. See `SalesClient.setUserProperty`.
@@ -132,6 +132,10 @@ public final class SalesStore: ObservableObject {
     public var isPaid: Bool      { user?.isPaid ?? false }
     public var isInTrial: Bool   { user?.isInTrial ?? false }
     public var creditBalance: Int { user?.credits.balance ?? 0 }
+    /// Credits bought but still on a drip-unlock schedule (not spendable yet).
+    public var lockedCredits: Int { user?.credits.locked ?? 0 }
+    /// When the next drip tranche unlocks. nil when nothing is locked.
+    public var nextCreditUnlockAt: Date? { user?.credits.nextUnlockAt }
     public var tier: String      { user?.premium.tier ?? "free" }
 
     // ------------------------------------------------------------------

@@ -228,7 +228,7 @@ Underlying client (`SalesCentral.shared.…`):
 | `restorePurchases(receipts:context:)` | Recover a user by signed receipts. Omits `receipts:` to use StoreKit's `currentEntitlements`. |
 | `applyReceipts(_:)` / `applyReceipt(_:)` | Upload signed receipts; server validates + applies effects. Idempotent. |
 | `currentSubscription()` | Source of truth for "is user paid right now?". |
-| `spendCredits(_:reason:)` | Debit credits; throws 402 / `insufficient_credits` if not enough. |
+| `spendCredits(_:reason:)` | Debit credits; returns post-spend `Credits` (incl. any drip-locked pool); throws 402 / `insufficient_credits` if not enough. |
 | `recordSession(start:end:durationSec:)` | Record a finished foreground session (or use `SessionTracker`). |
 | `track(_:properties:)` / `trackBatch(_:)` | Free-form analytics events. |
 | `clearUser()` | Local sign-out — wipes the JWT. |
@@ -313,7 +313,7 @@ do {
 
 | Code | When | What to do |
 |---|---|---|
-| `insufficient_credits` | spending more than the balance | show paywall |
+| `insufficient_credits` | spending more than the spendable balance | show paywall — but if `store.lockedCredits > 0`, prefer "your next \(amount) credits unlock at \(store.nextCreditUnlockAt!)" (drip-scheduled products release credits daily/weekly/monthly) |
 | `app_key_required` / `invalid_app_key` | wrong/missing API key | check `SalesConfig.apiKey` |
 | `user_token_required` / `invalid_user_token` | the user JWT expired — the SDK already cleared it | call `ensureUser()` again |
 | `endpoint_not_found` | wrong token in `SalesConfig.Tokens` | regenerate config from admin |

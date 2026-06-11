@@ -6,7 +6,25 @@ follow [semver](https://semver.org).
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** `spendCredits(_:reason:)` (on both `SalesClient` and
+  `SalesStore`) now returns `Credits` instead of `Int`. Call sites that
+  discard the result are unaffected; read `.balance` where you previously
+  bound the returned `Int`.
+- Date decoding now accepts ISO8601 strings with fractional seconds
+  (the server's native `JSON.stringify` format, e.g.
+  `2026-06-11T08:15:30.123Z`), fixing decode failures on date fields.
+
 ### Added
+- Drip-unlock credits. Products can grant credits on a release schedule
+  (e.g. 36,500/year unlocking 100/day) — configured per-product in the
+  admin; nothing to set up in the app.
+  - `Credits.locked` — credits purchased but not yet spendable.
+  - `Credits.nextUnlockAt` — when the next tranche unlocks.
+  - `SalesStore.lockedCredits` / `SalesStore.nextCreditUnlockAt`
+    convenience accessors.
+  - On `insufficient_credits` (402), re-check `user.credits` to show
+    "more credits unlock at <time>" instead of a bare paywall.
 - `SalesPaywall.loadProducts()` — one-call StoreKit product loader for a
   paywall. Equivalent to `SalesCentral.loadProducts().filter` against
   `paywall.productIds`, but folds the ordering and the missing-SKU warning
