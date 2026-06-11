@@ -130,7 +130,10 @@ public struct SalesConfig: Sendable {
                 currentSubscription: need("currentSubscription"),
                 spendCredits:        need("spendCredits"),
                 recordSession:       need("recordSession"),
-                recordEvent:         need("recordEvent")
+                recordEvent:         need("recordEvent"),
+                // Optional — older plists predate retention rewards. Calling
+                // claimReward() without it throws a descriptive invalidState.
+                claimReward:         t["claimReward"]
             )
         )
     }
@@ -144,6 +147,7 @@ public struct SalesConfig: Sendable {
         case .applyPurchases:      token = tokens.applyPurchases
         case .currentSubscription: token = tokens.currentSubscription
         case .spendCredits:        token = tokens.spendCredits
+        case .claimReward:         token = tokens.claimReward ?? "" // guarded in SalesClient.claimReward()
         case .recordSession:       token = tokens.recordSession
         case .recordEvent:         token = tokens.recordEvent
         }
@@ -158,6 +162,7 @@ public struct SalesConfig: Sendable {
         case applyPurchases
         case currentSubscription
         case spendCredits
+        case claimReward
         case recordSession
         case recordEvent
     }
@@ -172,6 +177,10 @@ public struct SalesConfig: Sendable {
         public let spendCredits: String
         public let recordSession: String
         public let recordEvent: String
+        /// Optional — apps configured before retention rewards existed don't
+        /// have this token. Regenerate the config from the admin's SDK
+        /// config card to pick it up.
+        public let claimReward: String?
 
         public init(
             createOrFetchUser: String,
@@ -180,7 +189,8 @@ public struct SalesConfig: Sendable {
             currentSubscription: String,
             spendCredits: String,
             recordSession: String,
-            recordEvent: String
+            recordEvent: String,
+            claimReward: String? = nil
         ) {
             self.createOrFetchUser   = createOrFetchUser
             self.restoreUser         = restoreUser
@@ -189,6 +199,7 @@ public struct SalesConfig: Sendable {
             self.spendCredits        = spendCredits
             self.recordSession       = recordSession
             self.recordEvent         = recordEvent
+            self.claimReward         = claimReward
         }
     }
 }

@@ -59,6 +59,8 @@ and paste the snippet from the admin's App Detail → SDK config card
         <string>YYYYYYYYYYYY</string>
         <key>spendCredits</key>
         <string>YYYYYYYYYYYY</string>
+        <key>claimReward</key>
+        <string>YYYYYYYYYYYY</string>                       <!-- optional — retention rewards -->
         <key>recordSession</key>
         <string>YYYYYYYYYYYY</string>
         <key>recordEvent</key>
@@ -229,6 +231,7 @@ Underlying client (`SalesCentral.shared.…`):
 | `applyReceipts(_:)` / `applyReceipt(_:)` | Upload signed receipts; server validates + applies effects. Idempotent. |
 | `currentSubscription()` | Source of truth for "is user paid right now?". |
 | `spendCredits(_:reason:)` | Debit credits; returns post-spend `Credits` (incl. any drip-locked pool); throws 402 / `insufficient_credits` if not enough. |
+| `claimReward()` | Claim the daily retention reward (login credits / streak) configured in the admin. One claim per UTC day — call it on app open or behind a "Claim" button. Check `retentionStatus` / `store.rewardAvailable` first. |
 | `recordSession(start:end:durationSec:)` | Record a finished foreground session (or use `SessionTracker`). |
 | `track(_:properties:)` / `trackBatch(_:)` | Free-form analytics events. |
 | `clearUser()` | Local sign-out — wipes the JWT. |
@@ -314,6 +317,9 @@ do {
 | Code | When | What to do |
 |---|---|---|
 | `insufficient_credits` | spending more than the spendable balance | show paywall — but if `store.lockedCredits > 0`, prefer "your next \(amount) credits unlock at \(store.nextCreditUnlockAt!)" (drip-scheduled products release credits daily/weekly/monthly) |
+| `already_claimed` | `claimReward()` after today's claim | disable the claim button until `retention?.nextClaimAt` |
+| `not_eligible` | `claimReward()` by a user outside the configured audience (e.g. premium user, free-only reward) | hide the claim UI |
+| `rewards_disabled` | `claimReward()` while the feature is off in the admin | hide the claim UI |
 | `app_key_required` / `invalid_app_key` | wrong/missing API key | check `SalesConfig.apiKey` |
 | `user_token_required` / `invalid_user_token` | the user JWT expired — the SDK already cleared it | call `ensureUser()` again |
 | `endpoint_not_found` | wrong token in `SalesConfig.Tokens` | regenerate config from admin |

@@ -16,6 +16,21 @@ follow [semver](https://semver.org).
   `2026-06-11T08:15:30.123Z`), fixing decode failures on date fields.
 
 ### Added
+- Retention rewards — daily login credits with optional streaks, configured
+  per app in the admin (App settings → Retention rewards; audience: all /
+  free / premium users).
+  - `claimReward()` on `SalesClient` and `SalesStore` — claims today's
+    reward; the server enforces one claim per UTC day, eligibility, and
+    streak progression, so call it wherever fits (app open or a button).
+  - `RetentionStatus` (`client.retentionStatus`, `store.retention`,
+    `store.rewardAvailable`) — claim availability, streak position
+    ("day 3 of 7"), next amounts, `nextClaimAt`. Refreshed on every
+    `ensureUser` / restore / claim.
+  - `RetentionClaimResult` — granted amount / streak bonus / post-claim
+    credits.
+  - New optional `claimReward` token in `SalesConfig.Tokens` / the config
+    plist. Existing configs keep working; regenerate from the admin's SDK
+    config card to enable claiming.
 - Drip-unlock credits. Products can grant credits on a release schedule
   (e.g. 36,500/year unlocking 100/day) — configured per-product in the
   admin; nothing to set up in the app.

@@ -13,6 +13,9 @@ public final class SalesStore: ObservableObject {
 
     @Published public private(set) var user: SalesUser?
     @Published public private(set) var subscription: CurrentSubscriptionResponse?
+    /// Retention-reward claim status — drive a "Claim daily reward" badge
+    /// off `retention?.available`. Refreshed by bootstrap / restore / claim.
+    @Published public private(set) var retention: RetentionStatus?
     @Published public private(set) var lastError: SalesError?
 
     public let client: SalesClient
@@ -47,6 +50,7 @@ public final class SalesStore: ObservableObject {
     public func bootstrap(_ context: UserContext = .current()) async {
         do {
             user = try await client.ensureUser(context: context)
+            retention = await client.retentionStatus
             subscription = try? await client.currentSubscription()
             await client.startObservingTransactions()
             sessionTracker.start()
@@ -61,6 +65,7 @@ public final class SalesStore: ObservableObject {
         do {
             let r = try await client.restorePurchases()
             user = r.user
+            retention = await client.retentionStatus
             subscription = try? await client.currentSubscription()
         } catch let err as SalesError {
             lastError = err
@@ -96,6 +101,26 @@ public final class SalesStore: ObservableObject {
             user = u
         }
         return credits
+    }
+
+    /// Claim today's retention reward. Updates `user` (credits) and
+    /// `retention` so views re-render without a re-fetch. Throws the same
+    /// `SalesError`s as `SalesClient.claimReward()` — branch on
+    /// `err.code == "already_claimed"` etc.
+    @discardableResult
+    public func claimReward() async throws -> RetentionClaimResult {
+        let result = try await client.claimReward()
+        if let r = result.retention { retention = r }
+        if var u = user {
+            u = SalesUser(
+                id: u.id, premium: u.premium,
+                credits: result.credits,
+                entitlements: u.entitlements, features: u.features,
+                properties: u.properties, stats: u.stats
+            )
+            user = u
+        }
+        return result
     }
 
     /// Set a single user property. See `SalesClient.setUserProperty`.
@@ -137,6 +162,8 @@ public final class SalesStore: ObservableObject {
     /// When the next drip tranche unlocks. nil when nothing is locked.
     public var nextCreditUnlockAt: Date? { user?.credits.nextUnlockAt }
     public var tier: String      { user?.premium.tier ?? "free" }
+    /// True when a retention reward is claimable right now.
+    public var rewardAvailable: Bool { retention?.available ?? false }
 
     // ------------------------------------------------------------------
     // MARK: - Paywalls / remote config / experiments

@@ -41,6 +41,11 @@ public actor SalesClient {
     /// Stable for the lifetime of each experiment.
     private(set) public var experimentAssignments: [String: String] = [:]
 
+    /// Retention-reward claim status (daily login credits / streaks).
+    /// Refreshed on every ensureUser / restorePurchases / claimReward call.
+    /// nil until the first round-trip, or on servers without the feature.
+    private(set) public var retentionStatus: RetentionStatus?
+
     private var observer: StoreKitObserver?
 
     public init(_ config: SalesConfig, urlSession: URLSession = .shared) {
@@ -102,6 +107,7 @@ public actor SalesClient {
         let paywalls: [SalesPaywall]?
         let remoteConfig: [String: SalesAnyValue]?
         let experimentAssignments: [String: String]?
+        let retention: RetentionStatus?
     }
 
     /// Common path for every endpoint that returns a config bundle.
@@ -115,7 +121,8 @@ public actor SalesClient {
         paywallsByKey = pwMap
         remoteConfigCache = resp.remoteConfig ?? [:]
         experimentAssignments = resp.experimentAssignments ?? [:]
-        SalesLog.debug(.sdk, "absorbed bundle — user=\(resp.user.id) products=\(configuredProductIDs.count) paywalls=\(pwMap.count) remoteConfig=\(remoteConfigCache.count) experiments=\(experimentAssignments.count)")
+        if let retention = resp.retention { retentionStatus = retention }
+        SalesLog.debug(.sdk, "absorbed bundle — user=\(resp.user.id) products=\(configuredProductIDs.count) paywalls=\(pwMap.count) remoteConfig=\(remoteConfigCache.count) experiments=\(experimentAssignments.count) rewardAvailable=\(retentionStatus?.available ?? false)")
     }
 
     /// Update context on the current user — locale change, ATT prompt
@@ -334,6 +341,49 @@ public actor SalesClient {
             body: Body(amount: amount, reason: reason), attachUserToken: true
         )
         return credits
+    }
+
+    // ------------------------------------------------------------------
+    // MARK: - Retention rewards
+    // ------------------------------------------------------------------
+
+    /// Claim today's retention reward (daily login credits / streak),
+    /// as configured in the admin's App settings → Retention rewards.
+    ///
+    /// Call it wherever fits your UX — on app open for an automatic
+    /// grant, or behind a "Claim" button. The server enforces one claim
+    /// per UTC day, audience eligibility, and the streak rules, so
+    /// calling it repeatedly is safe.
+    ///
+    /// Check `retentionStatus` (refreshed on every `ensureUser`) to badge
+    /// your claim UI before calling.
+    ///
+    /// Errors (`SalesError.http`, branch on `.code`):
+    ///   - `"already_claimed"` (409) — claimed today; `retentionStatus.nextClaimAt` says when.
+    ///   - `"not_eligible"`    (403) — user outside the configured audience.
+    ///   - `"rewards_disabled"`(404) — feature off for this app.
+    @discardableResult
+    public func claimReward() async throws -> RetentionClaimResult {
+        guard let token = config.tokens.claimReward, !token.isEmpty else {
+            throw SalesError.invalidState(
+                "claimReward token not configured — regenerate SalesCentral.plist from the admin's SDK config card"
+            )
+        }
+        let result: RetentionClaimResult = try await request(
+            .claimReward, method: "POST",
+            body: Empty(), attachUserToken: true
+        )
+        if let retention = result.retention { retentionStatus = retention }
+        if let u = currentUser {
+            currentUser = SalesUser(
+                id: u.id, premium: u.premium,
+                credits: result.credits,
+                entitlements: u.entitlements, features: u.features,
+                properties: u.properties, stats: u.stats
+            )
+        }
+        SalesLog.info(.sdk, "claimReward — +\(result.granted.total) credits (day \(result.granted.streakDay))")
+        return result
     }
 
     // ------------------------------------------------------------------

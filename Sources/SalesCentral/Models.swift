@@ -127,6 +127,93 @@ public struct Stats: Decodable, Sendable, Equatable {
     public let lifetimeRefundedCents: Int?
 }
 
+/// Retention-reward claim status — configured per app in the admin
+/// (App settings → Retention rewards) and refreshed on every `ensureUser`
+/// / restore round-trip plus every `claimReward()` call.
+public struct RetentionStatus: Decodable, Sendable, Equatable {
+    /// Feature switched on for this app at all.
+    public let enabled: Bool
+    /// Whether `claimReward()` would succeed right now.
+    public let available: Bool
+    /// Why not, when `available == false`:
+    /// `"disabled"` / `"audience"` / `"already_claimed"`.
+    public let reason: String?
+    /// `"daily"` or `"streak"`.
+    public let mode: String?
+    /// Credits granted per successful claim.
+    public let dailyAmount: Int?
+    /// Streak mode only — days in a full cycle.
+    public let streakLength: Int?
+    /// Streak mode only — extra credits on the cycle's final day.
+    public let streakBonusAmount: Int?
+    /// Consecutive days claimed (includes today once claimed).
+    public let streak: Int?
+    /// 1-based day the NEXT claim lands on ("Day 3 of 7").
+    public let nextStreakDay: Int?
+    /// What the next claim grants, excluding any bonus.
+    public let nextAmount: Int?
+    /// Bonus included in the next claim (0 when none).
+    public let nextBonus: Int?
+    public let claimedToday: Bool?
+    /// When the user can claim again. nil = claimable now.
+    public let nextClaimAt: Date?
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, available, reason, mode, dailyAmount, streakLength,
+             streakBonusAmount, streak, nextStreakDay, nextAmount, nextBonus,
+             claimedToday, nextClaimAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Tolerant decoding — servers may omit fields per mode/state.
+        self.enabled           = (try? c.decode(Bool.self,   forKey: .enabled)) ?? false
+        self.available         = (try? c.decode(Bool.self,   forKey: .available)) ?? false
+        self.reason            = try? c.decode(String.self,  forKey: .reason)
+        self.mode              = try? c.decode(String.self,  forKey: .mode)
+        self.dailyAmount       = try? c.decode(Int.self,     forKey: .dailyAmount)
+        self.streakLength      = try? c.decode(Int.self,     forKey: .streakLength)
+        self.streakBonusAmount = try? c.decode(Int.self,     forKey: .streakBonusAmount)
+        self.streak            = try? c.decode(Int.self,     forKey: .streak)
+        self.nextStreakDay     = try? c.decode(Int.self,     forKey: .nextStreakDay)
+        self.nextAmount        = try? c.decode(Int.self,     forKey: .nextAmount)
+        self.nextBonus         = try? c.decode(Int.self,     forKey: .nextBonus)
+        self.claimedToday      = try? c.decode(Bool.self,    forKey: .claimedToday)
+        self.nextClaimAt       = try? c.decode(Date.self,    forKey: .nextClaimAt)
+    }
+}
+
+/// Result of a successful `claimReward()` call.
+public struct RetentionClaimResult: Decodable, Sendable, Equatable {
+    public struct Granted: Decodable, Sendable, Equatable {
+        /// The daily reward portion.
+        public let amount: Int
+        /// Streak-completion bonus included in this claim (0 when none).
+        public let bonus: Int
+        /// amount + bonus — what actually landed on the balance.
+        public let total: Int
+        /// 1-based streak position this claim landed on.
+        public let streakDay: Int
+    }
+
+    public let granted: Granted
+    /// Post-claim status — `available` will be false until the next UTC day.
+    public let retention: RetentionStatus?
+    /// Post-claim credit state (balance + any drip-locked pool).
+    public let credits: Credits
+
+    private enum CodingKeys: String, CodingKey { case granted, retention }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.granted = try c.decode(Granted.self, forKey: .granted)
+        self.retention = try? c.decode(RetentionStatus.self, forKey: .retention)
+        // The claim response carries balance / locked / nextUnlockAt flat at
+        // the top level — same shape spendCredits returns.
+        self.credits = try Credits(from: decoder)
+    }
+}
+
 public struct SubscriptionDetail: Decodable, Sendable, Equatable {
     public let id: String
     public let productId: String
