@@ -23,7 +23,10 @@ final class StoreKitObserver: @unchecked Sendable {
         task = Task.detached(priority: .background) { [weak self] in
             for await update in StoreKit.Transaction.updates {
                 guard case .verified(let txn) = update, let client = self?.client else { continue }
-                let jws = String(decoding: txn.jsonRepresentation, as: UTF8.self)
+                // Upload Apple's SIGNED JWS (VerificationResult.jwsRepresentation),
+                // NOT the decoded Transaction.jsonRepresentation. Only the JWS carries
+                // the x5c certificate chain the server needs to verify the signature.
+                let jws = update.jwsRepresentation
                 do {
                     _ = try await client.applyReceipts([jws])
                     // We finish() ONLY after a successful upload. If the

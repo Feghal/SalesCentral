@@ -263,7 +263,8 @@ public enum SalesCentral {
             switch verification {
             case .verified(let txn):
                 SalesLog.info(.store, "purchase(\(product.id)) — verified txn=\(txn.id), uploading receipt")
-                let jws = String(decoding: txn.jsonRepresentation, as: UTF8.self)
+                // Upload the signed JWS (has x5c), not the decoded txn JSON.
+                let jws = verification.jwsRepresentation
                 let resp = try await shared.applyReceipt(jws)
                 await txn.finish()
                 await store.syncAfterPurchase(user: resp.user)

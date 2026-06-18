@@ -521,8 +521,10 @@ public actor SalesClient {
         #if canImport(StoreKit)
         var out: [String] = []
         for await result in StoreKit.Transaction.currentEntitlements {
-            if case .verified(let txn) = result {
-                out.append(String(decoding: txn.jsonRepresentation, as: UTF8.self))
+            if case .verified = result {
+                // Send the signed JWS (carries the x5c chain), not the decoded
+                // Transaction.jsonRepresentation which the server can't verify.
+                out.append(result.jwsRepresentation)
             }
         }
         return out
