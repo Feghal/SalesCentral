@@ -257,7 +257,18 @@ public enum SalesCentral {
     public static func purchase(_ product: Product) async throws -> PurchaseResult {
         ensureConfigured()
         SalesLog.info(.store, "purchase(\(product.id)) — opening StoreKit dialog")
-        let result = try await product.purchase()
+        // Stamp the purchase with our user id as Apple's `appAccountToken`.
+        // Apple echoes it on the original transaction AND every renewal, so the
+        // server can tie webhooks to this user even if the client never uploads
+        // a receipt (e.g. after a keychain reset). Requires a UUID; our user ids
+        // are UUIDs, so this is set whenever a user is known.
+        let accountToken: UUID? = await MainActor.run {
+            guard let uid = store.user?.id else { return nil }
+            return UUID(uuidString: uid)
+        }
+        let purchaseOptions: Set<Product.PurchaseOption> =
+            accountToken.map { [.appAccountToken($0)] } ?? []
+        let result = try await product.purchase(options: purchaseOptions)
         switch result {
         case .success(let verification):
             switch verification {
