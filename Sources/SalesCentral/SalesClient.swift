@@ -28,6 +28,13 @@ public actor SalesClient {
     /// so the SDK can ask StoreKit for products without the integrator
     /// hard-coding identifiers.
     private(set) public var configuredProductIDs: [String] = []
+    /// Full registered catalog (incl. effects), refreshed from every config bundle.
+    private(set) public var configuredProducts: [SalesProduct] = []
+
+    /// Effects configured for a given StoreKit product id (empty if unknown).
+    public func effects(forProductID id: String) -> [ProductEffect] {
+        configuredProducts.first(where: { $0.productId == id })?.effects ?? []
+    }
 
     /// Server-defined paywalls, keyed by `key`. Refreshed on every
     /// ensureUser / updateContext / restorePurchases call.
@@ -103,7 +110,7 @@ public actor SalesClient {
         let token: String
         let user: SalesUser
         let created: Bool?
-        let products: [String]?
+        let products: [SalesProduct]?
         let paywalls: [SalesPaywall]?
         let remoteConfig: [String: SalesAnyValue]?
         let experimentAssignments: [String: String]?
@@ -115,7 +122,8 @@ public actor SalesClient {
     fileprivate func absorbBundle(_ resp: ConfigBundleResponse) {
         config.tokenStore.write(resp.token)
         currentUser = resp.user
-        configuredProductIDs = resp.products ?? []
+        configuredProducts = resp.products ?? []
+        configuredProductIDs = configuredProducts.map(\.productId)
         var pwMap: [String: SalesPaywall] = [:]
         for pw in resp.paywalls ?? [] { pwMap[pw.key] = pw }
         paywallsByKey = pwMap
@@ -214,7 +222,10 @@ public actor SalesClient {
         let resp: RestoreResult = try await request(.restoreUser, method: "POST", body: body, attachUserToken: false)
         config.tokenStore.write(resp.token)
         currentUser = resp.user
-        if let ids = resp.products { configuredProductIDs = ids }
+        if let prods = resp.products {
+            configuredProducts = prods
+            configuredProductIDs = prods.map(\.productId)
+        }
         if let p = resp.paywalls {
             var map: [String: SalesPaywall] = [:]
             for pw in p { map[pw.key] = pw }

@@ -16,6 +16,9 @@ public final class SalesStore: ObservableObject {
     /// Retention-reward claim status — drive a "Claim daily reward" badge
     /// off `retention?.available`. Refreshed by bootstrap / restore / claim.
     @Published public private(set) var retention: RetentionStatus?
+    /// Registered catalog with effects, mirrored from the client after
+    /// ensureUser / restore. Drive paywall "what you get" UI off this.
+    @Published public private(set) var products: [SalesProduct] = []
     @Published public private(set) var lastError: SalesError?
 
     public let client: SalesClient
@@ -50,6 +53,7 @@ public final class SalesStore: ObservableObject {
     public func bootstrap(_ context: UserContext = .current()) async {
         do {
             user = try await client.ensureUser(context: context)
+            products = await client.configuredProducts
             retention = await client.retentionStatus
             subscription = try? await client.currentSubscription()
             await client.startObservingTransactions()
@@ -65,6 +69,7 @@ public final class SalesStore: ObservableObject {
         do {
             let r = try await client.restorePurchases()
             user = r.user
+            products = await client.configuredProducts
             retention = await client.retentionStatus
             subscription = try? await client.currentSubscription()
         } catch let err as SalesError {
@@ -164,6 +169,11 @@ public final class SalesStore: ObservableObject {
     public var tier: String      { user?.premium.tier ?? "free" }
     /// True when a retention reward is claimable right now.
     public var rewardAvailable: Bool { retention?.available ?? false }
+
+    /// Effects for a product id from the mirrored catalog (empty if unknown).
+    public func effects(forProductID id: String) -> [ProductEffect] {
+        products.first(where: { $0.productId == id })?.effects ?? []
+    }
 
     // ------------------------------------------------------------------
     // MARK: - Paywalls / remote config / experiments

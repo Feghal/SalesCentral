@@ -254,7 +254,7 @@ public struct RestoreResult: Decodable, Sendable {
     public let applied: [AppliedReceipt]
     /// Apple SKUs registered for this app in the admin. May be `nil` on
     /// older servers that don't ship the product-prefetch feature.
-    public let products: [String]?
+    public let products: [SalesProduct]?
     /// Bundled paywalls / remote config / variant assignments. May be
     /// `nil` on older servers; the SDK then falls back to whatever it
     /// already had cached.
@@ -269,7 +269,7 @@ public struct RestoreResult: Decodable, Sendable {
         user: SalesUser,
         restored: Bool,
         applied: [AppliedReceipt],
-        products: [String]? = nil,
+        products: [SalesProduct]? = nil,
         paywalls: [SalesPaywall]? = nil,
         remoteConfig: [String: SalesAnyValue]? = nil,
         experimentAssignments: [String: String]? = nil
