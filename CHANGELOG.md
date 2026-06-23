@@ -7,6 +7,11 @@ follow [semver](https://semver.org).
 ## [Unreleased]
 
 ### Changed
+- **Breaking (wire):** the `products` field in the create-or-fetch / restore
+  responses is now an array of rich product objects instead of `[String]` SKU
+  ids, decoded into `[SalesProduct]`. App code is unaffected — `loadProducts()`
+  and the StoreKit fetch still resolve by SKU id (derived internally via
+  `configuredProductIDs`). Requires the matching server build.
 - **Breaking:** `spendCredits(_:reason:)` (on both `SalesClient` and
   `SalesStore`) now returns `Credits` instead of `Int`. Call sites that
   discard the result are unaffected; read `.balance` where you previously
@@ -16,6 +21,17 @@ follow [semver](https://semver.org).
   `2026-06-11T08:15:30.123Z`), fixing decode failures on date fields.
 
 ### Added
+- Product effects in the catalog — apps can now read what a product *grants*
+  before purchase (e.g. to render paywall benefit rows), no hard-coding.
+  - `ProductEffect` — typed enum: `.setPremium(tier:durationDays:trialDurationDays:)`,
+    `.grantCredits(amount:trialAmount:unlockAmount:unlockPeriod:)`,
+    `.grantEntitlement(entitlement:durationDays:trialDurationDays:)`,
+    `.unlockFeature(feature:)`, and `.unknown(type:)` for forward-compat.
+  - `SalesProduct` — `{ productId, type, displayName, description,
+    subscriptionPeriod?, effects: [ProductEffect] }`, delivered with the catalog.
+  - `SalesStore.products` (`@Published`) + `SalesStore.effects(forProductID:)`;
+    `SalesClient.configuredProducts` + `SalesClient.effects(forProductID:)`.
+    StoreKit still owns price/title.
 - Retention rewards — daily login credits with optional streaks, configured
   per app in the admin (App settings → Retention rewards; audience: all /
   free / premium users).

@@ -158,6 +158,26 @@ finishes the transaction, and refreshes the shared store — all in one
 `await`. You never call `Transaction.updates`, `txn.finish()`, or read
 `jsonRepresentation` yourself.
 
+**Read what a product grants** — for paywall benefit rows, without hard-coding
+them. The effects the operator configured in the admin ship down with the
+catalog:
+
+```swift
+for effect in SalesCentral.store.effects(forProductID: product.id) {
+    switch effect {
+    case .grantCredits(let amount, _, _, _): addRow("\(amount) credits")
+    case .setPremium(let tier, _, _):        addRow("\(tier ?? "Pro") access")
+    case .grantEntitlement(let name, _, _):  addRow("Unlocks \(name)")
+    case .unlockFeature(let feature):        addRow("Unlocks \(feature)")
+    case .unknown:                           break   // newer effect type
+    }
+}
+```
+
+`store.products` (and `SalesCentral.shared.configuredProducts`) is
+`[SalesProduct]`, each with a typed `effects: [ProductEffect]`. StoreKit still
+owns price/title.
+
 ## Calling from anywhere
 
 `SalesCentral.shared` is the underlying `SalesClient` actor — use it for
@@ -214,6 +234,7 @@ Top-level facade (`SalesCentral.…`):
 | `loggingEnabled` | Toggle SDK logging (`os.Logger`, subsystem `com.salescentral.sdk`). |
 | `purchase(_:)` / `purchase(productID:)` | End-to-end purchase: dialog → verify → upload → finish → store refresh. |
 | `store` | Shared `SalesStore` for SwiftUI `.environmentObject(...)`. |
+| `store.products` / `store.effects(forProductID:)` | Registered catalog as `[SalesProduct]` with typed `[ProductEffect]` — what each product grants, for paywall benefit rows. |
 | `shared` | Underlying `SalesClient` actor for direct API calls. |
 
 Underlying client (`SalesCentral.shared.…`):
@@ -229,6 +250,7 @@ Underlying client (`SalesCentral.shared.…`):
 | `refreshConfig()` | Re-pull paywalls + remote-config + assignments from the server. |
 | `restorePurchases(receipts:context:)` | Recover a user by signed receipts. Omits `receipts:` to use StoreKit's `currentEntitlements`. |
 | `applyReceipts(_:)` / `applyReceipt(_:)` | Upload signed receipts; server validates + applies effects. Idempotent. |
+| `configuredProducts` / `effects(forProductID:)` | Registered catalog (`[SalesProduct]`) + per-product effect lookup, refreshed by `ensureUser` / `restorePurchases`. |
 | `currentSubscription()` | Source of truth for "is user paid right now?". |
 | `spendCredits(_:reason:)` | Debit credits; returns post-spend `Credits` (incl. any drip-locked pool); throws 402 / `insufficient_credits` if not enough. |
 | `claimReward()` | Claim the daily retention reward (login credits / streak) configured in the admin. One claim per UTC day — call it on app open or behind a "Claim" button. Check `retentionStatus` / `store.rewardAvailable` first. |
