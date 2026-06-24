@@ -20,6 +20,10 @@ public final class SessionTracker {
     private var startedAt: Date?
     private var observers: [Any] = []
 
+    /// Fired when the app returns to the foreground. `SalesStore` wires this
+    /// to re-sync subscription / premium on resume; left nil it's a no-op.
+    public var onForeground: (() async -> Void)?
+
     public init(client: SalesClient) {
         self.client = client
     }
@@ -59,6 +63,9 @@ public final class SessionTracker {
 
     private func foreground() {
         if startedAt == nil { startedAt = Date() }
+        if let hook = onForeground {
+            Task { await hook() }
+        }
     }
 
     private func background() {

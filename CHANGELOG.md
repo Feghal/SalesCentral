@@ -7,6 +7,13 @@ follow [semver](https://semver.org).
 ## [Unreleased]
 
 ### Changed
+- Premium/trial state is now **expiry-aware on the client**. `PremiumState.isPaid`
+  (and `SalesUser.isPaid` / `SalesStore.isPaid`), `SalesStore.tier`, and
+  `isInTrial` now respect `expiresAt` / `trialEndsAt` — a lapsed subscription
+  reports free **immediately, with no server round-trip**, fixing a bug where a
+  long-running (never-killed) app kept showing "pro" after expiry. `nil`
+  `expiresAt` still means no expiry (lifetime). Read `store.isPaid` / `store.tier`
+  rather than the raw `user.premium.tier` to get the expiry-aware value.
 - **Breaking (wire):** the `products` field in the create-or-fetch / restore
   responses is now an array of rich product objects instead of `[String]` SKU
   ids, decoded into `[SalesProduct]`. App code is unaffected — `loadProducts()`
@@ -21,6 +28,14 @@ follow [semver](https://semver.org).
   `2026-06-11T08:15:30.123Z`), fixing decode failures on date fields.
 
 ### Added
+- `PremiumState.effectiveTier` — the raw `tier` while active, `"free"` once
+  expired. `SalesStore.tier` now returns this.
+- `SalesStore.refreshSubscription()` — cheap re-pull of subscription + premium
+  that applies the server-reconciled `premium` to the cached user (so `isPaid` /
+  `tier` reflect server changes like renewals / refunds, not just local expiry).
+- Auto-refresh on app foreground — `bootstrap()` re-syncs subscription/premium
+  when the app returns to the foreground (via a new `SessionTracker.onForeground`
+  hook).
 - Product effects in the catalog — apps can now read what a product *grants*
   before purchase (e.g. to render paywall benefit rows), no hard-coding.
   - `ProductEffect` — typed enum: `.setPremium(tier:durationDays:trialDurationDays:)`,

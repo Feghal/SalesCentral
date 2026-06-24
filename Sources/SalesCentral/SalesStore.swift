@@ -57,6 +57,9 @@ public final class SalesStore: ObservableObject {
             retention = await client.retentionStatus
             subscription = try? await client.currentSubscription()
             await client.startObservingTransactions()
+            // Re-sync subscription/premium from the server whenever the app
+            // returns to the foreground (catches renewals / refunds on resume).
+            sessionTracker.onForeground = { [weak self] in await self?.refreshSubscription() }
             sessionTracker.start()
         } catch let err as SalesError {
             lastError = err
@@ -76,6 +79,29 @@ public final class SalesStore: ObservableObject {
             lastError = err
         } catch {
             lastError = .network(error.localizedDescription)
+        }
+    }
+
+    /// Re-pull subscription + premium from the server (a cheap GET) and apply
+    /// the server-reconciled `premium` to the cached user, so `isPaid` / `tier`
+    /// reflect the latest server state. Lightweight — call on app resume or
+    /// before showing a paywall. `bootstrap()` also wires this to fire
+    /// automatically when the app returns to the foreground.
+    ///
+    /// Note: `isPaid` / `tier` are already expiry-aware locally (they respect
+    /// `expiresAt` with no network), so this is for re-syncing server changes
+    /// like renewals / refunds, not for catching plain time-based expiry.
+    public func refreshSubscription() async {
+        guard let sub = try? await client.currentSubscription() else { return }
+        subscription = sub
+        if var u = user {
+            u = SalesUser(
+                id: u.id, premium: sub.premium,
+                credits: u.credits,
+                entitlements: u.entitlements, features: u.features,
+                properties: u.properties, stats: u.stats
+            )
+            user = u
         }
     }
 
@@ -166,7 +192,7 @@ public final class SalesStore: ObservableObject {
     public var lockedCredits: Int { user?.credits.locked ?? 0 }
     /// When the next drip tranche unlocks. nil when nothing is locked.
     public var nextCreditUnlockAt: Date? { user?.credits.nextUnlockAt }
-    public var tier: String      { user?.premium.tier ?? "free" }
+    public var tier: String      { user?.premium.effectiveTier ?? "free" }
     /// True when a retention reward is claimable right now.
     public var rewardAvailable: Bool { retention?.available ?? false }
 

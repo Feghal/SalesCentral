@@ -53,8 +53,8 @@ public struct SalesUser: Decodable, Sendable, Equatable {
     /// Convenience: is the user on any paid tier right now?
     public var isPaid: Bool { premium.isPaid }
 
-    /// Convenience: is the user currently in a free trial?
-    public var isInTrial: Bool { premium.isTrial ?? false }
+    /// Convenience: is the user currently in a free trial? (respects expiry)
+    public var isInTrial: Bool { premium.isInTrial }
 }
 
 // MARK: - SalesPropertyValue Decodable
@@ -79,7 +79,26 @@ public struct PremiumState: Decodable, Sendable, Equatable {
     public let isTrial: Bool?
     public let trialEndsAt: Date?
 
-    public var isPaid: Bool { tier != "free" }
+    /// True when the user currently has paid (non-free) access. Respects
+    /// `expiresAt`: a lapsed premium reports `false` immediately — no server
+    /// round-trip — so a long-running app reflects expiry the moment it passes.
+    /// A `nil` `expiresAt` means no expiry (e.g. lifetime / non-expiring grant).
+    public var isPaid: Bool {
+        guard tier != "free" else { return false }
+        if let expiresAt { return expiresAt > Date() }
+        return true
+    }
+
+    /// The effective tier accounting for expiry: the raw `tier` while active,
+    /// otherwise `"free"`. Use this for tier-gated UI instead of raw `tier`.
+    public var effectiveTier: String { isPaid ? tier : "free" }
+
+    /// True while a free trial is currently running (respects `trialEndsAt`).
+    public var isInTrial: Bool {
+        guard isTrial == true else { return false }
+        if let trialEndsAt { return trialEndsAt > Date() }
+        return true
+    }
 }
 
 public struct Credits: Decodable, Sendable, Equatable {

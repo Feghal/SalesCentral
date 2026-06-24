@@ -114,6 +114,13 @@ starts the session tracker. Idempotent — safe to call from multiple
 scenes. `SalesCentral.store` is safe to reference before `start()`
 finishes (first touch lazily reads the bundle).
 
+`store.isPaid` / `store.tier` / `store.isInTrial` are **expiry-aware** — they
+respect `expiresAt` / `trialEndsAt` locally, so a long-running app reflects a
+lapsed subscription with no server round-trip. (Read these, not the raw
+`store.user?.premium.tier`, which is the un-checked stored value.) The store
+also auto-re-syncs subscription/premium when the app returns to the foreground;
+call `store.refreshSubscription()` to force a re-sync (e.g. before a paywall).
+
 ## Loading + buying products
 
 `import SalesCentral` re-exports StoreKit's `Product` / `Transaction` types
@@ -235,6 +242,7 @@ Top-level facade (`SalesCentral.…`):
 | `purchase(_:)` / `purchase(productID:)` | End-to-end purchase: dialog → verify → upload → finish → store refresh. |
 | `store` | Shared `SalesStore` for SwiftUI `.environmentObject(...)`. |
 | `store.products` / `store.effects(forProductID:)` | Registered catalog as `[SalesProduct]` with typed `[ProductEffect]` — what each product grants, for paywall benefit rows. |
+| `store.refreshSubscription()` | Cheap re-pull of subscription + premium; applies the server-reconciled premium to `store.isPaid` / `store.tier`. Auto-fires on app foreground. |
 | `shared` | Underlying `SalesClient` actor for direct API calls. |
 
 Underlying client (`SalesCentral.shared.…`):
