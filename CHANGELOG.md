@@ -4,7 +4,7 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
-## [Unreleased]
+## [1.1.3] - 2026-06-23
 
 ### Fixed
 - Offline first launch no longer breaks user creation. Previously, launching
