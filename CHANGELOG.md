@@ -4,9 +4,21 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
-## [1.1.3] - 2026-06-23
+## [1.1.4] - 2026-06-23
 
 ### Fixed
+- Duplicate purchases / "not subscribed right after buying". A fresh purchase
+  was uploaded twice — by `purchase()` and by the StoreKit observer — racing on
+  the server; the loser hit the idempotency branch with a stale user and the
+  backend then returned/persisted `premium = free`, so the app showed the
+  paywall again and the user bought twice. Now the SDK de-duplicates the two
+  uploads (`SalesClient.claimTransaction`), and the server re-reads the persisted
+  user on an already-processed receipt so it never returns or saves stale
+  entitlements (both `POST /purchases` and `POST /users/restore`). `purchase()`
+  reflects the active subscription before `.success` returns.
+- `clearUser()` now also wipes the stable `clientId`, so it's a genuine identity
+  reset (the next create makes a new guest user) — previously the `clientId`
+  survived and the create de-duplicated back to the same user.
 - Offline first launch no longer breaks user creation. Previously, launching
   with no internet permanently marked the SDK "bootstrapped" with no user (so it
   never retried), and any later retry could create duplicate users. Now:
@@ -39,6 +51,8 @@ follow [semver](https://semver.org).
   `2026-06-11T08:15:30.123Z`), fixing decode failures on date fields.
 
 ### Added
+- `TokenStore.clearClientId()` — wipes the stored client id for a full identity
+  reset (default no-op; implemented by the built-in stores). `clearUser()` calls it.
 - `PremiumState.effectiveTier` — the raw `tier` while active, `"free"` once
   expired. `SalesStore.tier` now returns this.
 - `SalesStore.refreshSubscription()` — cheap re-pull of subscription + premium

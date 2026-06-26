@@ -306,6 +306,10 @@ public enum SalesCentral {
             switch verification {
             case .verified(let txn):
                 SalesLog.info(.store, "purchase(\(product.id)) — verified txn=\(txn.id), uploading receipt")
+                // Claim this txn so the StoreKit observer doesn't ALSO upload it
+                // concurrently (which would race on the server). purchase() is the
+                // authoritative uploader here — it needs the response.
+                _ = await shared.claimTransaction(String(txn.id))
                 // Upload the signed JWS (has x5c), not the decoded txn JSON.
                 let jws = verification.jwsRepresentation
                 let resp = try await shared.applyReceipt(jws)

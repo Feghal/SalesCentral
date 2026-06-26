@@ -43,4 +43,40 @@ final class OfflineUserCreationTests: XCTestCase {
         let json = String(decoding: try JSONEncoder().encode(UserContext()), as: UTF8.self)
         XCTAssertFalse(json.contains("clientId"), "nil clientId should not be serialized")
     }
+
+    /// Issue 2: a full identity reset must be possible — clearing wipes the
+    /// client id so the next create makes a brand-new guest user.
+    func testClearClientIdResetsIdentity() {
+        let s = InMemoryTokenStore()
+        s.writeClientId("uuid-x")
+        XCTAssertEqual(s.readClientId(), "uuid-x")
+        s.clearClientId()
+        XCTAssertNil(s.readClientId(), "clearClientId wipes the stored id")
+    }
+
+    /// Issue 1 dedup: a transaction is claimed once — the StoreKit observer
+    /// skips one an explicit purchase() already claimed, so they don't both
+    /// upload the same transaction.
+    func testClaimTransactionDeduplicates() async {
+        let config = SalesConfig(
+            baseURL: URL(string: "https://sales.example.com")!,
+            apiKey: "csk_xyz",
+            tokens: .init(
+                createOrFetchUser:   "111111111111",
+                restoreUser:         "222222222222",
+                applyPurchases:      "333333333333",
+                currentSubscription: "444444444444",
+                spendCredits:        "555555555555",
+                recordSession:       "666666666666",
+                recordEvent:         "777777777777"
+            )
+        )
+        let client = SalesClient(config)
+        let first  = await client.claimTransaction("tx-1")
+        let second = await client.claimTransaction("tx-1")
+        let other  = await client.claimTransaction("tx-2")
+        XCTAssertTrue(first,  "first claim wins")
+        XCTAssertFalse(second, "duplicate claim is rejected")
+        XCTAssertTrue(other,  "a different transaction claims fine")
+    }
 }

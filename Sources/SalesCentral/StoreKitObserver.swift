@@ -23,6 +23,10 @@ final class StoreKitObserver: @unchecked Sendable {
         task = Task.detached(priority: .background) { [weak self] in
             for await update in StoreKit.Transaction.updates {
                 guard case .verified(let txn) = update, let client = self?.client else { continue }
+                // Skip transactions an explicit purchase() is already handling —
+                // otherwise both upload the SAME transaction concurrently and race
+                // on the server. purchase() finishes the txn itself.
+                guard await client.claimTransaction(String(txn.id)) else { continue }
                 // Upload Apple's SIGNED JWS (VerificationResult.jwsRepresentation),
                 // NOT the decoded Transaction.jsonRepresentation. Only the JWS carries
                 // the x5c certificate chain the server needs to verify the signature.

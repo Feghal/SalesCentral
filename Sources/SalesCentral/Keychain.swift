@@ -18,11 +18,15 @@ public protocol TokenStore: Sendable {
     /// idempotency until they implement these. The built-in stores do.
     func readClientId() -> String?
     func writeClientId(_ id: String)
+    /// Wipe the stored client id so the next create starts a brand-new guest
+    /// user (a genuine identity reset). Default is a no-op.
+    func clearClientId()
 }
 
 public extension TokenStore {
     func readClientId() -> String? { nil }
     func writeClientId(_ id: String) {}
+    func clearClientId() {}
 }
 
 /// Default token store — system Keychain with a UserDefaults shadow.
@@ -131,6 +135,11 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
         defaults.set(id, forKey: clientIdDefaultsKey)
     }
 
+    public func clearClientId() {
+        SecItemDelete(clientIdQuery as CFDictionary)
+        defaults.removeObject(forKey: clientIdDefaultsKey)
+    }
+
     // ------------------------------------------------------------------
 
     private func readKeychain() -> String? {
@@ -164,4 +173,5 @@ public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     public func clear() { lock.lock(); defer { lock.unlock() }; self.token = nil }
     public func readClientId() -> String? { lock.lock(); defer { lock.unlock() }; return clientId_ }
     public func writeClientId(_ id: String) { lock.lock(); defer { lock.unlock() }; clientId_ = id }
+    public func clearClientId() { lock.lock(); defer { lock.unlock() }; clientId_ = nil }
 }

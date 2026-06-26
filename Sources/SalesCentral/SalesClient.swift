@@ -55,6 +55,21 @@ public actor SalesClient {
 
     private var observer: StoreKitObserver?
 
+    /// Transaction ids already claimed for upload, so the explicit purchase()
+    /// upload and the StoreKit observer don't both send the SAME transaction.
+    /// Actor-isolated → the check-and-insert is atomic.
+    private var claimedTransactionIDs: Set<String> = []
+
+    /// Claim a transaction id for upload. Returns true if it's newly claimed
+    /// (caller should upload), false if it was already claimed (caller should
+    /// skip — someone else is handling it). Bounded so it can't grow forever.
+    func claimTransaction(_ id: String) -> Bool {
+        if claimedTransactionIDs.contains(id) { return false }
+        if claimedTransactionIDs.count > 512 { claimedTransactionIDs.removeAll() }
+        claimedTransactionIDs.insert(id)
+        return true
+    }
+
     public init(_ config: SalesConfig, urlSession: URLSession = .shared) {
         self.config = config
         self.session = urlSession
@@ -252,8 +267,15 @@ public actor SalesClient {
     /// Sign the user out locally. Doesn't invalidate the server-side JWT
     /// (it'll just naturally expire); call this when the user explicitly
     /// signs out or when you want to start fresh.
+    ///
+    /// Also wipes the stable `clientId`, so the next `ensureUser()` creates a
+    /// genuinely NEW guest user instead of de-duplicating back to this one —
+    /// a real identity reset (useful for testing). Also clears the in-flight
+    /// transaction-claim set.
     public func clearUser() {
         config.tokenStore.clear()
+        config.tokenStore.clearClientId()
+        claimedTransactionIDs = []
         currentUser = nil
         paywallsByKey = [:]
         remoteConfigCache = [:]
