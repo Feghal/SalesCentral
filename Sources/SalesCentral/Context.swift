@@ -17,6 +17,10 @@ public struct UserContext: Encodable, Sendable {
     public var consent: ConsentContext?
     public var push: PushContext?
     public var metadata: [String: AnyEncodable]?
+    /// SDK-managed stable client id (UUID), injected by `SalesClient` on
+    /// createOrFetch so a tokenless retry resolves to the same server user.
+    /// Callers don't set this — it has a default and is filled in internally.
+    public var clientId: String? = nil
 
     public init(
         device: DeviceContext? = nil,

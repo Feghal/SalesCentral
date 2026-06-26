@@ -11,6 +11,18 @@ public protocol TokenStore: Sendable {
     func read() -> String?
     func write(_ token: String)
     func clear()
+
+    /// Read/persist the SDK's stable client id (a UUID) used for idempotent
+    /// user creation. Default implementations are no-ops so existing custom
+    /// `TokenStore`s keep compiling — they just don't get cross-launch
+    /// idempotency until they implement these. The built-in stores do.
+    func readClientId() -> String?
+    func writeClientId(_ id: String)
+}
+
+public extension TokenStore {
+    func readClientId() -> String? { nil }
+    func writeClientId(_ id: String) {}
 }
 
 /// Default token store — system Keychain with a UserDefaults shadow.
@@ -83,6 +95,42 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
         defaults.removeObject(forKey: defaultsKey)
     }
 
+    // MARK: - Client id (stable idempotent-create key)
+
+    private var clientIdQuery: [String: Any] {
+        [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "client_id",
+        ]
+    }
+    private var clientIdDefaultsKey: String { "\(service).client_id" }
+
+    public func readClientId() -> String? {
+        var q = clientIdQuery
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        if SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
+           let data = item as? Data, let s = String(data: data, encoding: .utf8) {
+            return s
+        }
+        // Keychain miss — fall back to the UserDefaults shadow and self-heal,
+        // mirroring read()'s app-transfer recovery.
+        guard let s = defaults.string(forKey: clientIdDefaultsKey) else { return nil }
+        writeClientId(s)
+        return s
+    }
+
+    public func writeClientId(_ id: String) {
+        SecItemDelete(clientIdQuery as CFDictionary)
+        var add = clientIdQuery
+        add[kSecValueData as String]      = Data(id.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(add as CFDictionary, nil)
+        defaults.set(id, forKey: clientIdDefaultsKey)
+    }
+
     // ------------------------------------------------------------------
 
     private func readKeychain() -> String? {
@@ -110,7 +158,10 @@ public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     private let lock = NSLock()
     private var token: String?
     public init(initial: String? = nil) { self.token = initial }
+    private var clientId_: String?
     public func read() -> String? { lock.lock(); defer { lock.unlock() }; return token }
     public func write(_ token: String) { lock.lock(); defer { lock.unlock() }; self.token = token }
     public func clear() { lock.lock(); defer { lock.unlock() }; self.token = nil }
+    public func readClientId() -> String? { lock.lock(); defer { lock.unlock() }; return clientId_ }
+    public func writeClientId(_ id: String) { lock.lock(); defer { lock.unlock() }; clientId_ = id }
 }

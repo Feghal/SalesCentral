@@ -73,6 +73,10 @@ public enum SalesCentral {
     /// task and get the same `[Product]`.
     private static var _productsTask: Task<[Product], Error>?
 
+    /// Watches for network reconnection to retry a bootstrap that failed
+    /// offline. Created lazily on failure, stopped once bootstrap succeeds.
+    private static var _reconnectMonitor: NetworkMonitor?
+
     // ------------------------------------------------------------------
     // MARK: - Lifecycle
     // ------------------------------------------------------------------
@@ -91,16 +95,42 @@ public enum SalesCentral {
             SalesLog.debug(.sdk, "start() called again — bootstrap already complete, no-op")
             return
         }
-        _bootstrapped = true
         SalesLog.info(.sdk, "start() — bootstrapping…")
-        await store.bootstrap()
+        // Single-flight: concurrent start()/loadProducts triggers share ONE
+        // attempt (no duplicate user creation), and a failed attempt leaves the
+        // store un-bootstrapped so we can retry.
+        await store.ensureBootstrapped()
+        guard await store.didBootstrap else {
+            // No user established (e.g. offline first launch). Do NOT mark
+            // _bootstrapped — leave it retryable — and watch for reconnect so
+            // we recover automatically once the network returns.
+            SalesLog.warn(.sdk, "start() — bootstrap failed (no user; likely offline). Watching for reconnect to retry.")
+            startReconnectMonitor()
+            return
+        }
+        _bootstrapped = true
+        _reconnectMonitor?.stop(); _reconnectMonitor = nil
         SalesLog.info(.sdk, "start() — bootstrap complete; prefetching StoreKit products")
         // Right after bootstrap, the SalesClient knows which Apple SKUs the
         // admin has registered for this app (returned from createOrFetchUser).
         // Kick off the StoreKit lookup in the background — `loadProducts()`
         // awaits the same task. Don't await it here so first paint isn't
         // blocked by the StoreKit network call.
-        _productsTask = Task { try await fetchProductsFromStoreKit() }
+        if _productsTask == nil {
+            _productsTask = Task { try await fetchProductsFromStoreKit() }
+        }
+    }
+
+    /// Watch for network reconnection and retry `start()` once we're online,
+    /// so a first launch with no internet recovers without the user relaunching
+    /// the app. No-op once a second time (idempotent); `start()` itself is a
+    /// no-op after bootstrap succeeds. Stopped once bootstrap completes.
+    private static func startReconnectMonitor() {
+        guard _reconnectMonitor == nil else { return }
+        let m = NetworkMonitor()
+        m.onReconnect = { Task { await start() } }
+        _reconnectMonitor = m
+        m.start()
     }
 
     /// Inject an explicit `SalesConfig` instead of reading the bundle.
@@ -126,6 +156,8 @@ public enum SalesCentral {
         SalesLog.debug(.sdk, "reset() — clearing configuration")
         _productsTask?.cancel()
         _productsTask = nil
+        _reconnectMonitor?.stop()
+        _reconnectMonitor = nil
         _client = nil
         _store = nil
         _bootstrapped = false

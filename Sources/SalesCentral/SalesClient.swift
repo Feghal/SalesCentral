@@ -92,14 +92,27 @@ public actor SalesClient {
     /// context you passed in.
     @discardableResult
     public func ensureUser(context: UserContext = .current()) async throws -> SalesUser {
+        var ctx = context
+        ctx.clientId = clientId()   // idempotent-create key (see clientId())
         let resp: ConfigBundleResponse = try await request(
             .createOrFetchUser,
             method: "POST",
-            body: context,
+            body: ctx,
             attachUserToken: config.tokenStore.read() != nil
         )
         absorbBundle(resp)
         return resp.user
+    }
+
+    /// Stable client id (UUID) persisted in the token store, generated once
+    /// per install. Sent on `createOrFetchUser` so a tokenless retry — offline
+    /// first launch, or a create whose response was lost — resolves to the
+    /// SAME server user instead of creating a duplicate.
+    private func clientId() -> String {
+        if let existing = config.tokenStore.readClientId() { return existing }
+        let id = UUID().uuidString
+        config.tokenStore.writeClientId(id)
+        return id
     }
 
     /// Decoded shape of every server response that carries a user state

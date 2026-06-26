@@ -24,6 +24,12 @@ public final class SalesStore: ObservableObject {
     public let client: SalesClient
     private let sessionTracker: SessionTracker
 
+    /// True once a user has actually been established (a successful bootstrap).
+    /// Stays false after an offline failure so `ensureBootstrapped()` retries.
+    public private(set) var didBootstrap = false
+    /// In-flight bootstrap, so concurrent callers share one attempt.
+    private var bootstrapTask: Task<Void, Never>?
+
     /// Convenience: build a fresh `SalesClient` from a `SalesConfig` and
     /// delegate to the designated initializer below.
     public convenience init(_ config: SalesConfig) {
@@ -66,6 +72,23 @@ public final class SalesStore: ObservableObject {
         } catch {
             lastError = .network(error.localizedDescription)
         }
+    }
+
+    /// Single-flight bootstrap. Concurrent callers await the SAME in-flight
+    /// attempt — so the SDK never fires two `createOrFetch` requests and
+    /// double-creates a user — and a failed attempt (e.g. offline first launch)
+    /// leaves `didBootstrap` false so the next call retries. `@MainActor`
+    /// isolation makes the task check-and-set atomic.
+    public func ensureBootstrapped(_ context: UserContext = .current()) async {
+        if didBootstrap { return }
+        if let task = bootstrapTask { await task.value }
+        else {
+            let task = Task { await bootstrap(context) }
+            bootstrapTask = task
+            await task.value
+            bootstrapTask = nil
+        }
+        if user != nil { didBootstrap = true }
     }
 
     public func restorePurchases() async {

@@ -6,6 +6,17 @@ follow [semver](https://semver.org).
 
 ## [Unreleased]
 
+### Fixed
+- Offline first launch no longer breaks user creation. Previously, launching
+  with no internet permanently marked the SDK "bootstrapped" with no user (so it
+  never retried), and any later retry could create duplicate users. Now:
+  bootstrap is **single-flight** (concurrent `start()` / `loadProducts` triggers
+  share one attempt), `start()` only marks success when a user is actually
+  established (so it retries), a **`NetworkMonitor`** auto-retries when the
+  network returns, and the SDK sends a stable Keychain-persisted **client id**
+  so a tokenless / lost-response retry resolves to the same user instead of
+  duplicating (requires the matching server build).
+
 ### Changed
 - Premium/trial state is now **expiry-aware on the client**. `PremiumState.isPaid`
   (and `SalesUser.isPaid` / `SalesStore.isPaid`), `SalesStore.tier`, and
