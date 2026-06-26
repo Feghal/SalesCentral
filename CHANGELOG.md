@@ -4,9 +4,17 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
-## [1.1.4] - 2026-06-23
+## [1.1.5] - 2026-06-23
 
 ### Fixed
+- "Purchase with no sheet that leaves the user free." StoreKit can hand back an
+  already-owned / expired entitlement (no purchase dialog — common in sandbox);
+  the SDK uploaded it and reported `.success` even though nothing new was
+  granted, and the user then showed as free. Now the backend rejects receipts it
+  can't honor (`expired_transaction` / `revoked_transaction` /
+  `product_not_registered`) instead of granting-then-downgrading, and
+  `purchase()` returns the new `.notEntitled(reason:)` case instead of a
+  misleading `.success` — so the app shows the paywall rather than unlocking.
 - Hardening pass (full-codebase bug hunt):
   - `spendCredits` no longer updates the cache stalely — `currentUser` now
     reflects the post-spend balance after the server responds.
@@ -60,6 +68,10 @@ follow [semver](https://semver.org).
   `2026-06-11T08:15:30.123Z`), fixing decode failures on date fields.
 
 ### Added
+- `PurchaseResult.notEntitled(reason:)` — returned by `purchase()` when StoreKit
+  hands back a transaction that doesn't grant a current entitlement (already
+  owned / expired) and the backend rejects it. Switch on it to show your paywall
+  instead of unlocking.
 - `TokenStore.clearClientId()` — wipes the stored client id for a full identity
   reset (default no-op; implemented by the built-in stores). `clearUser()` calls it.
 - `PremiumState.effectiveTier` — the raw `tier` while active, `"free"` once

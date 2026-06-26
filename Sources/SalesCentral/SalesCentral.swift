@@ -315,7 +315,15 @@ public enum SalesCentral {
                 let resp = try await shared.applyReceipt(jws)
                 await txn.finish()
                 await store.syncAfterPurchase(user: resp.user)
-                SalesLog.info(.store, "purchase(\(product.id)) — applied \(resp.applied.count) effect(s)")
+                // StoreKit can hand back an already-owned / expired entitlement
+                // with no purchase sheet; the backend rejects receipts it can't
+                // honor (expired / revoked / unregistered). Don't report those as
+                // a successful subscribe — the user gained nothing new.
+                if let first = resp.applied.first, first.ok == false {
+                    SalesLog.warn(.store, "purchase(\(product.id)) — receipt not applied: \(first.error ?? "unknown")")
+                    return .notEntitled(reason: first.error ?? "not_entitled")
+                }
+                SalesLog.info(.store, "purchase(\(product.id)) — applied \(resp.applied.count) receipt(s)")
                 return .success(applied: resp.applied)
             case .unverified(_, let error):
                 SalesLog.warn(.store, "purchase(\(product.id)) — UNVERIFIED: \(error.localizedDescription)")
@@ -528,6 +536,15 @@ public enum PurchaseResult: Sendable {
     /// transaction. Rare; signals tampering or a corrupted StoreKit
     /// response — **do not unlock the purchase**.
     case unverified(reason: String)
+
+    /// StoreKit returned a transaction (sometimes with no purchase sheet — an
+    /// already-owned non-consumable, an already-active subscription, or a
+    /// sandbox re-test) but it did NOT grant a current entitlement: the backend
+    /// rejected it (e.g. `expired_transaction`, `revoked_transaction`,
+    /// `product_not_registered`). The user was NOT charged for anything new —
+    /// **do not unlock**; show your paywall / "subscription expired" state.
+    /// `reason` is the backend's machine code.
+    case notEntitled(reason: String)
 
     /// Convenience: was the purchase fully completed (effects applied)?
     public var didSucceed: Bool {
