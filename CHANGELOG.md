@@ -7,6 +7,15 @@ follow [semver](https://semver.org).
 ## [1.1.4] - 2026-06-23
 
 ### Fixed
+- Hardening pass (full-codebase bug hunt):
+  - `spendCredits` no longer updates the cache stalely — `currentUser` now
+    reflects the post-spend balance after the server responds.
+  - `absorbBundle` no longer wipes the paywall / remote-config / experiment
+    caches when a lean (or older-server) response omits those blocks; each is
+    replaced only when present (matching `restorePurchases`).
+  - The transaction-claim de-dupe cache now prunes oldest entries at its cap
+    instead of wiping wholesale (a wipe could let an old txn be re-claimed and
+    re-uploaded).
 - Duplicate purchases / "not subscribed right after buying". A fresh purchase
   was uploaded twice — by `purchase()` and by the StoreKit observer — racing on
   the server; the loser hit the idempotency branch with a stale user and the

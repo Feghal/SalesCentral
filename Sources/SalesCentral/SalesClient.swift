@@ -57,16 +57,26 @@ public actor SalesClient {
 
     /// Transaction ids already claimed for upload, so the explicit purchase()
     /// upload and the StoreKit observer don't both send the SAME transaction.
-    /// Actor-isolated → the check-and-insert is atomic.
+    /// Actor-isolated → the check-and-insert is atomic. The Set backs the O(1)
+    /// membership test; the array preserves insertion order so we can prune the
+    /// OLDEST entries (not blow away everything) when we hit the cap.
     private var claimedTransactionIDs: Set<String> = []
+    private var claimedTransactionOrder: [String] = []
+    private let claimedTransactionCap = 512
 
     /// Claim a transaction id for upload. Returns true if it's newly claimed
     /// (caller should upload), false if it was already claimed (caller should
-    /// skip — someone else is handling it). Bounded so it can't grow forever.
+    /// skip — someone else is handling it). Bounded so it can't grow forever:
+    /// when over the cap we drop only the oldest entries, keeping recent ids
+    /// (a blanket wipe would make old txns re-claimable and re-uploadable).
     func claimTransaction(_ id: String) -> Bool {
         if claimedTransactionIDs.contains(id) { return false }
-        if claimedTransactionIDs.count > 512 { claimedTransactionIDs.removeAll() }
         claimedTransactionIDs.insert(id)
+        claimedTransactionOrder.append(id)
+        while claimedTransactionOrder.count > claimedTransactionCap {
+            let oldest = claimedTransactionOrder.removeFirst()
+            claimedTransactionIDs.remove(oldest)
+        }
         return true
     }
 
@@ -152,13 +162,17 @@ public actor SalesClient {
         currentUser = resp.user
         configuredProducts = resp.products ?? []
         configuredProductIDs = configuredProducts.map(\.productId)
-        var pwMap: [String: SalesPaywall] = [:]
-        for pw in resp.paywalls ?? [] { pwMap[pw.key] = pw }
-        paywallsByKey = pwMap
-        remoteConfigCache = resp.remoteConfig ?? [:]
-        experimentAssignments = resp.experimentAssignments ?? [:]
+        // Only replace each cache when the response actually carries it — a
+        // lean/older response that omits a block must not WIPE the cache.
+        if let paywalls = resp.paywalls {
+            var pwMap: [String: SalesPaywall] = [:]
+            for pw in paywalls { pwMap[pw.key] = pw }
+            paywallsByKey = pwMap
+        }
+        if let rc = resp.remoteConfig { remoteConfigCache = rc }
+        if let ea = resp.experimentAssignments { experimentAssignments = ea }
         if let retention = resp.retention { retentionStatus = retention }
-        SalesLog.debug(.sdk, "absorbed bundle — user=\(resp.user.id) products=\(configuredProductIDs.count) paywalls=\(pwMap.count) remoteConfig=\(remoteConfigCache.count) experiments=\(experimentAssignments.count) rewardAvailable=\(retentionStatus?.available ?? false)")
+        SalesLog.debug(.sdk, "absorbed bundle — user=\(resp.user.id) products=\(configuredProductIDs.count) paywalls=\(paywallsByKey.count) remoteConfig=\(remoteConfigCache.count) experiments=\(experimentAssignments.count) rewardAvailable=\(retentionStatus?.available ?? false)")
     }
 
     /// Update context on the current user — locale change, ATT prompt
@@ -276,6 +290,7 @@ public actor SalesClient {
         config.tokenStore.clear()
         config.tokenStore.clearClientId()
         claimedTransactionIDs = []
+        claimedTransactionOrder = []
         currentUser = nil
         paywallsByKey = [:]
         remoteConfigCache = [:]
@@ -386,6 +401,14 @@ public actor SalesClient {
             .spendCredits, method: "POST",
             body: Body(amount: amount, reason: reason), attachUserToken: true
         )
+        if let u = currentUser {
+            currentUser = SalesUser(
+                id: u.id, premium: u.premium,
+                credits: credits,
+                entitlements: u.entitlements, features: u.features,
+                properties: u.properties, stats: u.stats
+            )
+        }
         return credits
     }
 
