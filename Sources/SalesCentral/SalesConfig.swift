@@ -11,7 +11,7 @@ import Foundation
 /// admin and copy the prebuilt Swift snippet from the "SDK config" card.
 public struct SalesConfig: Sendable {
     /// The public origin where the SalesCentral service is reachable,
-    /// e.g. `https://sales.yourdomain.com`. No trailing slash.
+    /// e.g. `https://sales-central.org`. No trailing slash.
     public let baseURL: URL
 
     /// API key for this app — sent as the `x-app-key` header on every
@@ -45,7 +45,7 @@ public struct SalesConfig: Sendable {
     ///    ```xml
     ///    <plist version="1.0">
     ///    <dict>
-    ///        <key>baseURL</key> <string>https://sales.yourdomain.com</string>
+    ///        <key>baseURL</key> <string>https://sales-central.org</string>
     ///        <key>apiKey</key>  <string>csk_XXXXXXXXXXXXXXXXXXXXXXXXXXXX</string>
     ///        <key>tokens</key>
     ///        <dict>

@@ -44,7 +44,7 @@ and paste the snippet from the admin's App Detail → SDK config card
 <plist version="1.0">
 <dict>
     <key>baseURL</key>
-    <string>https://sales.yourdomain.com</string>
+    <string>https://sales-central.org</string>
     <key>apiKey</key>
     <string>csk_XXXXXXXXXXXXXXXXXXXXXXXXXXXX</string>     <!-- replace with your app's apiKey -->
     <key>tokens</key>
@@ -301,7 +301,7 @@ Admin side — once the operator pastes the app's APNs key (Key ID / Team ID / `
 - **Rules** — event-triggered auto-push. When the SDK calls `SalesCentral.shared.track("event_name", properties: [...])`, matching rules send that user a push with template-interpolated copy (`{{user.premium.tier}}`, `{{event.properties.X}}`, etc.).
 - **History** — audit log of every send.
 
-Full walkthrough in [docs/INTEGRATION.md → Push notifications](https://sales.goaichat.app/docs#push-notifications).
+Full walkthrough in [docs/INTEGRATION.md → Push notifications](https://sales-central.org/docs#push-notifications).
 
 ## Capturing context
 
