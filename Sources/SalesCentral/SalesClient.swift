@@ -603,6 +603,11 @@ public actor SalesClient {
     private struct ChallengeResponse: Decodable { let ok: Bool?; let challenge: String }
     private struct AttestRegisterBody: Encodable { let keyId: String; let attestation: String; let challenge: String }
 
+    /// Coalesces concurrent first-launch attest flows: the actor suspends at
+    /// awaits inside the attest round-trips, so without this two racing
+    /// callers would each generate + register their own key.
+    private var attestInFlight: Task<String, Error>?
+
     private func fetchAttestChallenge() async throws -> String {
         let resp: ChallengeResponse = try await request(.attestChallenge, method: "POST", body: Empty(), attachUserToken: false)
         return resp.challenge
@@ -610,10 +615,22 @@ public actor SalesClient {
 
     /// First-launch flow: generate a Secure Enclave key, have Apple attest
     /// it, register it with the server, persist the keyId. Subsequent calls
-    /// return the stored keyId without touching DeviceCheck.
+    /// return the stored keyId without touching DeviceCheck. Concurrent
+    /// first-time callers share a single in-flight attest Task so only one
+    /// key is ever generated and registered.
     private func ensureAttestedKeyId() async throws -> String {
         if let existing = config.tokenStore.readAttestKeyId() { return existing }
+        if let inFlight = attestInFlight { return try await inFlight.value }
         guard attestService.isSupported else { throw SalesError.attestUnsupported }
+        let task = Task { try await self.performFirstAttest() }
+        attestInFlight = task
+        defer { attestInFlight = nil }   // clear on success AND failure so a later call can retry
+        return try await task.value
+    }
+
+    /// Generate a Secure Enclave key, have Apple attest it, register it with
+    /// the server, and persist the keyId.
+    private func performFirstAttest() async throws -> String {
         let keyId = try await attestService.generateKey()
         let challenge = try await fetchAttestChallenge()
         guard let challengeData = Data(base64urlEncoded: challenge) else {

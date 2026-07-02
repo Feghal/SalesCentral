@@ -7,9 +7,17 @@ final class AttestTests: XCTestCase {
 
     final class MockAttestService: AppAttestServicing, @unchecked Sendable {
         var supported = true
-        var generateKeyCalls = 0
+        private let lock = NSLock()
+        private var _generateKeyCalls = 0
+        var generateKeyCalls: Int {
+            lock.lock(); defer { lock.unlock() }
+            return _generateKeyCalls
+        }
         var isSupported: Bool { supported }
-        func generateKey() async throws -> String { generateKeyCalls += 1; return "mock-key-id" }
+        func generateKey() async throws -> String {
+            lock.lock(); _generateKeyCalls += 1; lock.unlock()
+            return "mock-key-id"
+        }
         func attestKey(_ keyId: String, clientDataHash: Data) async throws -> Data {
             Data("attestation-for-\(keyId)".utf8)
         }
@@ -153,5 +161,17 @@ final class AttestTests: XCTestCase {
         XCTAssertEqual(mock.generateKeyCalls, 1, "re-attested exactly once")
         let createAttempts = StubProtocol.seen.filter { $0.path == "/c0ffee000001" }.count
         XCTAssertEqual(createAttempts, 2, "original attempt + exactly one retry")
+    }
+
+    func testConcurrentFirstCallsShareOneAttestation() async throws {
+        let store = InMemoryTokenStore()
+        let mock = MockAttestService()
+        let client = makeClient(store: store, mock: mock)
+        async let a: SalesUser = client.ensureUser()
+        async let b: SalesUser = client.ensureUser()
+        _ = try await (a, b)
+        XCTAssertEqual(mock.generateKeyCalls, 1, "concurrent first calls must share one attest flow")
+        let registrations = StubProtocol.seen.filter { $0.path == "/c0ffee000009" }.count
+        XCTAssertEqual(registrations, 1, "exactly one key registration")
     }
 }
