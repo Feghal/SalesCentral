@@ -15,7 +15,9 @@ final class SalesCentralTests: XCTestCase {
                 currentSubscription: "444444444444",
                 spendCredits:        "555555555555",
                 recordSession:       "666666666666",
-                recordEvent:         "777777777777"
+                recordEvent:         "777777777777",
+                attestChallenge:     "attc00000000",
+                attestKey:           "attk00000000"
             )
         )
         XCTAssertEqual(config.url(for: .createOrFetchUser).absoluteString,
@@ -104,6 +106,7 @@ final class SalesCentralTests: XCTestCase {
             let payload: [String: Any] = [
                 "ok": true,
                 "token": "next-token",
+                "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 "user": [
                     "id": "u-1",
                     "premium": ["tier": "free"],
@@ -124,6 +127,7 @@ final class SalesCentralTests: XCTestCase {
         }
 
         let store = InMemoryTokenStore(initial: "starting-token")
+        store.writeAttestKeyId("mock-key-id")
         let config = SalesConfig(
             baseURL: URL(string: "https://sales.test")!,
             apiKey: "csk_x",
@@ -134,11 +138,13 @@ final class SalesCentralTests: XCTestCase {
                 currentSubscription: "DDDDDDDDDDDD",
                 spendCredits:        "EEEEEEEEEEEE",
                 recordSession:       "FFFFFFFFFFFF",
-                recordEvent:         "GGGGGGGGGGGG"
+                recordEvent:         "GGGGGGGGGGGG",
+                attestChallenge:     "attc00000000",
+                attestKey:           "attk00000000"
             ),
             tokenStore: store
         )
-        let client = SalesClient(config, urlSession: session)
+        let client = SalesClient(config, urlSession: session, attestService: StubAttestService())
 
         let user = try await client.setUserProperties([
             "email": "alice@example.com",
@@ -181,6 +187,7 @@ final class SalesCentralTests: XCTestCase {
             let payload: [String: Any] = [
                 "ok": true,
                 "token": "t",
+                "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 "user": [
                     "id": "u-1",
                     "premium": ["tier": "free"],
@@ -227,11 +234,13 @@ final class SalesCentralTests: XCTestCase {
                 currentSubscription: "DDDDDDDDDDDD",
                 spendCredits:        "EEEEEEEEEEEE",
                 recordSession:       "FFFFFFFFFFFF",
-                recordEvent:         "GGGGGGGGGGGG"
+                recordEvent:         "GGGGGGGGGGGG",
+                attestChallenge:     "attc00000000",
+                attestKey:           "attk00000000"
             ),
             tokenStore: store
         )
-        let client = SalesClient(config, urlSession: session)
+        let client = SalesClient(config, urlSession: session, attestService: StubAttestService())
         _ = try await client.ensureUser()
 
         // Paywall is cached.
@@ -273,7 +282,9 @@ final class SalesCentralTests: XCTestCase {
                 currentSubscription: "DDDDDDDDDDDD",
                 spendCredits:        "EEEEEEEEEEEE",
                 recordSession:       "FFFFFFFFFFFF",
-                recordEvent:         "GGGGGGGGGGGG"
+                recordEvent:         "GGGGGGGGGGGG",
+                attestChallenge:     "attc00000000",
+                attestKey:           "attk00000000"
             ),
             tokenStore: store
         )
@@ -326,4 +337,18 @@ private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {}
+}
+
+// MARK: - Stub AppAttestServicing
+
+/// App Attest is unavailable on the machine running `swift test` (no
+/// DeviceCheck), so these HTTP-plumbing tests inject a trivial mock — they
+/// aren't exercising attestation itself, just need calls to asserted
+/// endpoints to get past the local `isSupported` gate. See AttestTests.swift
+/// for the real attestation-flow coverage.
+private struct StubAttestService: AppAttestServicing, Sendable {
+    var isSupported: Bool { true }
+    func generateKey() async throws -> String { "stub-key-id" }
+    func attestKey(_ keyId: String, clientDataHash: Data) async throws -> Data { Data("stub-attestation".utf8) }
+    func generateAssertion(_ keyId: String, clientDataHash: Data) async throws -> Data { Data("stub-assertion".utf8) }
 }

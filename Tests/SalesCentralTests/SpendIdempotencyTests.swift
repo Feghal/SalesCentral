@@ -37,7 +37,20 @@ final class SpendIdempotencyTests: XCTestCase {
         override func stopLoading() {}
     }
 
+    /// Trivial `AppAttestServicing` mock — these tests exercise the spend /
+    /// claimReward wire format, not attestation itself, so the mock just
+    /// needs to satisfy the asserted-endpoint gate. See AttestTests.swift
+    /// for the real attestation-flow coverage.
+    struct StubAttestService: AppAttestServicing, Sendable {
+        var isSupported: Bool { true }
+        func generateKey() async throws -> String { "stub-key-id" }
+        func attestKey(_ keyId: String, clientDataHash: Data) async throws -> Data { Data("stub-attestation".utf8) }
+        func generateAssertion(_ keyId: String, clientDataHash: Data) async throws -> Data { Data("stub-assertion".utf8) }
+    }
+
     private func makeClient() -> SalesClient {
+        let store = InMemoryTokenStore(initial: "user-token-1")
+        store.writeAttestKeyId("stub-key-id")
         let config = SalesConfig(
             baseURL: URL(string: "https://sales.example.com")!,
             apiKey: "csk_xyz",
@@ -49,13 +62,15 @@ final class SpendIdempotencyTests: XCTestCase {
                 spendCredits:        "555555555555",
                 recordSession:       "666666666666",
                 recordEvent:         "777777777777",
+                attestChallenge:     "attc00000000",
+                attestKey:           "attk00000000",
                 claimReward:         "888888888888"
             ),
-            tokenStore: InMemoryTokenStore(initial: "user-token-1")
+            tokenStore: store
         )
         let sc = URLSessionConfiguration.ephemeral
         sc.protocolClasses = [Stub.self]
-        return SalesClient(config, urlSession: URLSession(configuration: sc))
+        return SalesClient(config, urlSession: URLSession(configuration: sc), attestService: StubAttestService())
     }
 
     override func tearDown() {
@@ -64,8 +79,14 @@ final class SpendIdempotencyTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Canned response shared by every request the client makes during a
+    /// test — including the attest-challenge fetch, which needs a
+    /// `challenge` field to decode.
+    private static let okWithChallenge =
+        #"{"ok":true,"balance":70,"locked":0,"challenge":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#
+
     func testSpendCreditsSendsIdempotencyKey() async throws {
-        Stub.next = { _ in (200, Data(#"{"ok":true,"balance":70,"locked":0}"#.utf8)) }
+        Stub.next = { _ in (200, Data(Self.okWithChallenge.utf8)) }
         let client = makeClient()
         _ = try await client.spendCredits(30, reason: "image_gen", idempotencyKey: "op-123")
         let body = String(decoding: Stub.lastBody ?? Data(), as: UTF8.self)
@@ -73,7 +94,7 @@ final class SpendIdempotencyTests: XCTestCase {
     }
 
     func testSpendCreditsOmitsIdempotencyKeyWhenNil() async throws {
-        Stub.next = { _ in (200, Data(#"{"ok":true,"balance":70,"locked":0}"#.utf8)) }
+        Stub.next = { _ in (200, Data(Self.okWithChallenge.utf8)) }
         let client = makeClient()
         _ = try await client.spendCredits(30, reason: "image_gen")
         let body = String(decoding: Stub.lastBody ?? Data(), as: UTF8.self)
@@ -88,7 +109,15 @@ final class SpendIdempotencyTests: XCTestCase {
                       "nextClaimAt":"2026-07-03T00:00:00.000Z"},
          "balance":590,"locked":0}
         """
-        Stub.next = { _ in (409, Data(payload.utf8)) }
+        // Only the claimReward call itself should conflict — the attest
+        // challenge fetch that precedes it (an unrelated round trip) must
+        // succeed, or the 409 below would be misattributed to the wrong
+        // request.
+        Stub.next = { req in
+            req.url!.path == "/attc00000000"
+                ? (200, Data(Self.okWithChallenge.utf8))
+                : (409, Data(payload.utf8))
+        }
         let client = makeClient()
         do {
             _ = try await client.claimReward()

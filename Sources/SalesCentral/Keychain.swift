@@ -21,12 +21,23 @@ public protocol TokenStore: Sendable {
     /// Wipe the stored client id so the next create starts a brand-new guest
     /// user (a genuine identity reset). Default is a no-op.
     func clearClientId()
+
+    /// Read/persist the App Attest keyId registered with the server.
+    /// Defaults are no-ops so custom TokenStores keep compiling; the
+    /// built-in stores implement them.
+    func readAttestKeyId() -> String?
+    func writeAttestKeyId(_ id: String)
+    func clearAttestKeyId()
 }
 
 public extension TokenStore {
     func readClientId() -> String? { nil }
     func writeClientId(_ id: String) {}
     func clearClientId() {}
+
+    func readAttestKeyId() -> String? { nil }
+    func writeAttestKeyId(_ id: String) {}
+    func clearAttestKeyId() {}
 }
 
 /// Default token store — system Keychain with a UserDefaults shadow.
@@ -140,6 +151,47 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
         defaults.removeObject(forKey: clientIdDefaultsKey)
     }
 
+    // MARK: - Attest keyId (App Attest key registered with the server)
+
+    private var attestKeyIdQuery: [String: Any] {
+        [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "attest_key_id",
+        ]
+    }
+    private var attestKeyIdDefaultsKey: String { "\(service).attest_key_id" }
+
+    public func readAttestKeyId() -> String? {
+        var q = attestKeyIdQuery
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        if SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
+           let data = item as? Data, let s = String(data: data, encoding: .utf8) {
+            return s
+        }
+        // Keychain miss — fall back to the UserDefaults shadow and self-heal,
+        // mirroring read()'s app-transfer recovery.
+        guard let s = defaults.string(forKey: attestKeyIdDefaultsKey) else { return nil }
+        writeAttestKeyId(s)
+        return s
+    }
+
+    public func writeAttestKeyId(_ id: String) {
+        SecItemDelete(attestKeyIdQuery as CFDictionary)
+        var add = attestKeyIdQuery
+        add[kSecValueData as String]      = Data(id.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(add as CFDictionary, nil)
+        defaults.set(id, forKey: attestKeyIdDefaultsKey)
+    }
+
+    public func clearAttestKeyId() {
+        SecItemDelete(attestKeyIdQuery as CFDictionary)
+        defaults.removeObject(forKey: attestKeyIdDefaultsKey)
+    }
+
     // ------------------------------------------------------------------
 
     private func readKeychain() -> String? {
@@ -168,10 +220,14 @@ public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     private var token: String?
     public init(initial: String? = nil) { self.token = initial }
     private var clientId_: String?
+    private var attestKeyId_: String?
     public func read() -> String? { lock.lock(); defer { lock.unlock() }; return token }
     public func write(_ token: String) { lock.lock(); defer { lock.unlock() }; self.token = token }
     public func clear() { lock.lock(); defer { lock.unlock() }; self.token = nil }
     public func readClientId() -> String? { lock.lock(); defer { lock.unlock() }; return clientId_ }
     public func writeClientId(_ id: String) { lock.lock(); defer { lock.unlock() }; clientId_ = id }
     public func clearClientId() { lock.lock(); defer { lock.unlock() }; clientId_ = nil }
+    public func readAttestKeyId() -> String? { lock.lock(); defer { lock.unlock() }; return attestKeyId_ }
+    public func writeAttestKeyId(_ id: String) { lock.lock(); defer { lock.unlock() }; attestKeyId_ = id }
+    public func clearAttestKeyId() { lock.lock(); defer { lock.unlock() }; attestKeyId_ = nil }
 }

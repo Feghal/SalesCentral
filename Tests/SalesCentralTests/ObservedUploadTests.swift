@@ -28,7 +28,9 @@ final class ObservedUploadTests: XCTestCase {
                 currentSubscription: "444444444444",
                 spendCredits:        "555555555555",
                 recordSession:       "666666666666",
-                recordEvent:         "777777777777"
+                recordEvent:         "777777777777",
+                attestChallenge:     "attc00000000",
+                attestKey:           "attk00000000"
             )
         )
         let sessionConfig = URLSessionConfiguration.ephemeral

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// The single entry point for talking to the SalesCentral backend.
 ///
@@ -20,6 +21,7 @@ public actor SalesClient {
     private let session: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let attestService: AppAttestServicing
 
     private(set) public var currentUser: SalesUser?
 
@@ -107,9 +109,10 @@ public actor SalesClient {
         }
     }
 
-    public init(_ config: SalesConfig, urlSession: URLSession = .shared) {
+    public init(_ config: SalesConfig, urlSession: URLSession = .shared, attestService: AppAttestServicing? = nil) {
         self.config = config
         self.session = urlSession
+        self.attestService = attestService ?? LiveAppAttestService()
 
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
@@ -584,11 +587,75 @@ public actor SalesClient {
         }
     }
 
+    /// Endpoints that must carry a hardware assertion. Mirrors the server's
+    /// ENDPOINT_META `assert` flags — keep the two lists in sync.
+    private static let assertedEndpoints: Set<SalesConfig.Endpoint> = [
+        .createOrFetchUser, .restoreUser, .applyPurchases, .spendCredits, .claimReward,
+    ]
+
+    /// 401 codes that mean "your attest proof was bad", NOT "your user
+    /// token is bad" — these must not wipe the stored user session.
+    private static let attestErrorCodes: Set<String> = [
+        "attestation_required", "unknown_attest_key", "invalid_challenge",
+        "invalid_assertion", "assertion_replay", "attest_config_missing",
+    ]
+
+    private struct ChallengeResponse: Decodable { let ok: Bool?; let challenge: String }
+    private struct AttestRegisterBody: Encodable { let keyId: String; let attestation: String; let challenge: String }
+
+    private func fetchAttestChallenge() async throws -> String {
+        let resp: ChallengeResponse = try await request(.attestChallenge, method: "POST", body: Empty(), attachUserToken: false)
+        return resp.challenge
+    }
+
+    /// First-launch flow: generate a Secure Enclave key, have Apple attest
+    /// it, register it with the server, persist the keyId. Subsequent calls
+    /// return the stored keyId without touching DeviceCheck.
+    private func ensureAttestedKeyId() async throws -> String {
+        if let existing = config.tokenStore.readAttestKeyId() { return existing }
+        guard attestService.isSupported else { throw SalesError.attestUnsupported }
+        let keyId = try await attestService.generateKey()
+        let challenge = try await fetchAttestChallenge()
+        guard let challengeData = Data(base64urlEncoded: challenge) else {
+            throw SalesError.invalidState("server challenge was not base64url")
+        }
+        let attestation = try await attestService.attestKey(keyId, clientDataHash: Data(SHA256.hash(data: challengeData)))
+        let _: EmptyOK = try await request(
+            .attestKey, method: "POST",
+            body: AttestRegisterBody(keyId: keyId, attestation: attestation.base64EncodedString(), challenge: challenge),
+            attachUserToken: false
+        )
+        config.tokenStore.writeAttestKeyId(keyId)
+        SalesLog.info(.http, "app attest key registered")
+        return keyId
+    }
+
+    /// Assertion headers for one asserted call. clientDataHash =
+    /// SHA256(challengeBytes ‖ SHA256(exact body bytes)) — must match the
+    /// server's recipe bit-for-bit.
+    private func attestHeaders(bodyData: Data) async throws -> [String: String] {
+        guard attestService.isSupported else { throw SalesError.attestUnsupported }
+        let keyId = try await ensureAttestedKeyId()
+        let challenge = try await fetchAttestChallenge()
+        guard let challengeData = Data(base64urlEncoded: challenge) else {
+            throw SalesError.invalidState("server challenge was not base64url")
+        }
+        let bodyHash = Data(SHA256.hash(data: bodyData))
+        let clientDataHash = Data(SHA256.hash(data: challengeData + bodyHash))
+        let assertion = try await attestService.generateAssertion(keyId, clientDataHash: clientDataHash)
+        return [
+            "x-attest-key-id": keyId,
+            "x-attest-challenge": challenge,
+            "x-attest-assertion": assertion.base64EncodedString(),
+        ]
+    }
+
     private func request<B: Encodable, T: Decodable>(
         _ endpoint: SalesConfig.Endpoint,
         method: String,
         body: B?,
-        attachUserToken: Bool
+        attachUserToken: Bool,
+        isAttestRetry: Bool = false
     ) async throws -> T {
         let url = config.url(for: endpoint)
         var req = URLRequest(url: url)
@@ -597,9 +664,18 @@ public actor SalesClient {
         if attachUserToken, let token = config.tokenStore.read() {
             req.setValue(token, forHTTPHeaderField: "x-user-token")
         }
+        var bodyData: Data? = nil
         if let body = body, !(body is Empty) {
+            bodyData = try encoder.encode(body)
+        }
+        if Self.assertedEndpoints.contains(endpoint) {
+            for (k, v) in try await attestHeaders(bodyData: bodyData ?? Data()) {
+                req.setValue(v, forHTTPHeaderField: k)
+            }
+        }
+        if let bodyData {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try encoder.encode(body)
+            req.httpBody = bodyData
         }
 
         SalesLog.debug(.http, "→ \(method) \(endpoint) \(url.path)")
@@ -630,7 +706,15 @@ public actor SalesClient {
             // invalidated. We keep the clientId so the next ensureUser()
             // de-dupes back to the SAME guest rather than minting a new one —
             // a 401 is an expired session, not an identity reset.
-            if http.statusCode == 401 {
+            // Attest rejections are about the DEVICE key, not the user
+            // session — recover the key, don't wipe the user.
+            if http.statusCode == 401, err.error == "unknown_attest_key",
+               Self.assertedEndpoints.contains(endpoint), !isAttestRetry {
+                config.tokenStore.clearAttestKeyId()
+                return try await request(endpoint, method: method, body: body,
+                                         attachUserToken: attachUserToken, isAttestRetry: true)
+            }
+            if http.statusCode == 401, !Self.attestErrorCodes.contains(err.error) {
                 config.tokenStore.clear()
                 currentUser = nil
                 paywallsByKey = [:]

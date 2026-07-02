@@ -18,6 +18,11 @@ public enum SalesError: Error, CustomStringConvertible, Sendable {
     /// A precondition wasn't met locally (e.g. no token, invalid input).
     case invalidState(String)
 
+    /// App Attest is unavailable on this device (e.g. the iOS Simulator).
+    /// There is no fallback — run on a physical device, or point the SDK at
+    /// a dev server started with APP_ATTEST_BYPASS_IN_DEV=1.
+    case attestUnsupported
+
     public var description: String {
         switch self {
         case .http(let s, let c, let m):
@@ -28,6 +33,8 @@ public enum SalesError: Error, CustomStringConvertible, Sendable {
             return "Network error: \(m)"
         case .invalidState(let m):
             return "Invalid state: \(m)"
+        case .attestUnsupported:
+            return "App Attest unsupported on this device"
         }
     }
 

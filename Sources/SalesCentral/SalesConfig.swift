@@ -51,6 +51,8 @@ public struct SalesConfig: Sendable {
     ///        <dict>
     ///            <key>createOrFetchUser</key> <string>YYYYYYYYYYYY</string>
     ///            <key>restoreUser</key>       <string>YYYYYYYYYYYY</string>
+    ///            <key>attestChallenge</key>   <string>YYYYYYYYYYYY</string>
+    ///            <key>attestKey</key>         <string>YYYYYYYYYYYY</string>
     ///            ...
     ///        </dict>
     ///    </dict>
@@ -131,6 +133,8 @@ public struct SalesConfig: Sendable {
                 spendCredits:        need("spendCredits"),
                 recordSession:       need("recordSession"),
                 recordEvent:         need("recordEvent"),
+                attestChallenge:     need("attestChallenge"),
+                attestKey:           need("attestKey"),
                 // Optional — older plists predate retention rewards. Calling
                 // claimReward() without it throws a descriptive invalidState.
                 claimReward:         t["claimReward"]
@@ -150,6 +154,8 @@ public struct SalesConfig: Sendable {
         case .claimReward:         token = tokens.claimReward ?? "" // guarded in SalesClient.claimReward()
         case .recordSession:       token = tokens.recordSession
         case .recordEvent:         token = tokens.recordEvent
+        case .attestChallenge:     token = tokens.attestChallenge
+        case .attestKey:           token = tokens.attestKey
         }
         return baseURL.appendingPathComponent(token)
     }
@@ -165,6 +171,8 @@ public struct SalesConfig: Sendable {
         case claimReward
         case recordSession
         case recordEvent
+        case attestChallenge
+        case attestKey
     }
 
     /// The per-operation tokens for one app. The admin's "SDK config" card
@@ -177,6 +185,8 @@ public struct SalesConfig: Sendable {
         public let spendCredits: String
         public let recordSession: String
         public let recordEvent: String
+        public let attestChallenge: String
+        public let attestKey: String
         /// Optional — apps configured before retention rewards existed don't
         /// have this token. Regenerate the config from the admin's SDK
         /// config card to pick it up.
@@ -190,6 +200,8 @@ public struct SalesConfig: Sendable {
             spendCredits: String,
             recordSession: String,
             recordEvent: String,
+            attestChallenge: String,
+            attestKey: String,
             claimReward: String? = nil
         ) {
             self.createOrFetchUser   = createOrFetchUser
@@ -199,6 +211,8 @@ public struct SalesConfig: Sendable {
             self.spendCredits        = spendCredits
             self.recordSession       = recordSession
             self.recordEvent         = recordEvent
+            self.attestChallenge     = attestChallenge
+            self.attestKey           = attestKey
             self.claimReward         = claimReward
         }
     }
