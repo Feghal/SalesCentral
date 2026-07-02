@@ -98,9 +98,16 @@ Three things must be configured:
 3. Regenerate `SalesCentral.plist` so it includes the `attestChallenge` /
    `attestKey` tokens shown above.
 
-The iOS **Simulator cannot run App Attest** — calls throw `SalesError.attestUnsupported`
-there. Test on a physical device, or point the SDK at a dev server started
-with `APP_ATTEST_BYPASS_IN_DEV=1` (ignored when `NODE_ENV=production`).
+### Simulator & sandbox mode
+
+The iOS **Simulator cannot run App Attest**. The SDK handles this
+automatically — it sends an explicit `x-attest-unsupported: 1` signal
+instead of an assertion, and the server admits the call as a **sandbox
+identity**: a separate user with play-money credits, restricted to
+Sandbox-environment Apple receipts, and excluded from production
+analytics. Nothing to configure; the Simulator works against any server,
+including production. Test on a physical device to exercise real attested
+behavior.
 
 ## Quick start (SwiftUI)
 
@@ -231,6 +238,22 @@ let products = try await paywall.loadProducts()   // [Product] in admin order
 let label: String = SalesCentral.shared.remoteConfig("cta_label", default: "Continue")
 ```
 
+### Charge credits after the work succeeds
+
+Gate locally on the cached balance, do the work, then charge on success with
+an idempotency key — a timed-out retry with the same key never double-debits:
+
+```swift
+guard SalesCentral.store.creditBalance >= 50 else { return showPaywall() }
+let intentKey = UUID().uuidString
+let result = try await runDiffusion()
+try await SalesCentral.shared.spendCredits(50, reason: "image_gen", idempotencyKey: intentKey)
+```
+
+There's no server-side hold/escrow — the key only protects one intent from
+being double-charged; concurrent intents can still race the balance (the
+loser gets 402 `insufficient_credits`).
+
 ## Logging
 
 The SDK logs every meaningful step through Apple's unified logging system
@@ -289,7 +312,7 @@ Underlying client (`SalesCentral.shared.…`):
 | `applyReceipts(_:)` / `applyReceipt(_:)` | Upload signed receipts; server validates + applies effects. Idempotent. |
 | `configuredProducts` / `effects(forProductID:)` | Registered catalog (`[SalesProduct]`) + per-product effect lookup, refreshed by `ensureUser` / `restorePurchases`. |
 | `currentSubscription()` | Source of truth for "is user paid right now?". |
-| `spendCredits(_:reason:)` | Debit credits; returns post-spend `Credits` (incl. any drip-locked pool); throws 402 / `insufficient_credits` if not enough. |
+| `spendCredits(_:reason:idempotencyKey:)` | Debit credits; returns post-spend `Credits` (incl. any drip-locked pool); throws 402 / `insufficient_credits` if not enough. Pass `idempotencyKey:` so a retry after a timeout never double-debits. |
 | `claimReward()` | Claim the daily retention reward (login credits / streak) configured in the admin. One claim per UTC day — call it on app open or behind a "Claim" button. Check `retentionStatus` / `store.rewardAvailable` first. |
 | `recordSession(start:end:durationSec:)` | Record a finished foreground session (or use `SessionTracker`). |
 | `track(_:properties:)` / `trackBatch(_:)` | Free-form analytics events. |
@@ -383,10 +406,12 @@ do {
 | `user_token_required` / `invalid_user_token` | the user JWT expired — the SDK already cleared it | call `ensureUser()` again |
 | `endpoint_not_found` | wrong token in `SalesConfig.Tokens` | regenerate config from admin |
 | `product_not_registered` | uploaded a receipt for a product not in the admin | add the product on the admin's Products page |
+| `production_receipt_on_sandbox_user` | a sandbox identity (Simulator) presented a Production-environment receipt — per-receipt, inside `applied[]` | use Sandbox App Store receipts on the Simulator |
 
-`SalesError.attestUnsupported` is a separate case (no `.code` — it never
-reaches the server) thrown when App Attest isn't available on this device,
-most commonly the iOS **Simulator**. See [App Attest](#app-attest).
+`SalesError.attestUnsupported` exists for API stability but the SDK no
+longer throws it from the normal request path — a device that can't run
+App Attest (most commonly the iOS **Simulator**) now runs as a sandbox
+identity instead. See [Simulator & sandbox mode](#app-attest).
 
 ## Custom token storage
 
