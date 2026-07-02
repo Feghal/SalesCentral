@@ -30,6 +30,10 @@ final class AttestTests: XCTestCase {
     final class StubProtocol: URLProtocol {
         static var routes: [String: (Int, String)] = [:]
         static var seen: [(path: String, headers: [String: String], body: Data?)] = []
+        /// Consulted before `routes` for paths that need stateful / sequenced
+        /// responses (e.g. "fail once, then succeed"). Return nil to fall
+        /// through to the static `routes` table.
+        static var handler: ((String) -> (Int, String)?)?
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
@@ -47,7 +51,7 @@ final class AttestTests: XCTestCase {
                 return d
             }
             Self.seen.append((path, headers, body))
-            let (status, json) = Self.routes[path] ?? (404, #"{"ok":false,"error":"not_found"}"#)
+            let (status, json) = Self.handler?(path) ?? Self.routes[path] ?? (404, #"{"ok":false,"error":"not_found"}"#)
             let resp = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Data(json.utf8))
@@ -89,6 +93,7 @@ final class AttestTests: XCTestCase {
             "/c0ffee000007": (200, #"{"ok":true}"#),
         ]
         StubProtocol.seen = []
+        StubProtocol.handler = nil
     }
 
     func testFirstLaunchAttestsRegistersAndAsserts() async throws {
@@ -173,5 +178,41 @@ final class AttestTests: XCTestCase {
         XCTAssertEqual(mock.generateKeyCalls, 1, "concurrent first calls must share one attest flow")
         let registrations = StubProtocol.seen.filter { $0.path == "/c0ffee000009" }.count
         XCTAssertEqual(registrations, 1, "exactly one key registration")
+    }
+
+    func testTokenKeyMismatchRecoversByReMintingUserToken() async throws {
+        let store = InMemoryTokenStore(initial: "stale-user-token")
+        store.writeAttestKeyId("mock-key-id")
+        let mock = MockAttestService()
+        let client = makeClient(store: store, mock: mock)
+
+        // First spendCredits attempt fails with 403 token_key_mismatch (the
+        // stored user JWT names a previous device key); every attempt after
+        // that succeeds with a valid Credits payload.
+        var spendAttempts = 0
+        StubProtocol.handler = { path in
+            guard path == "/c0ffee000005" else { return nil }
+            spendAttempts += 1
+            if spendAttempts == 1 {
+                return (403, #"{"ok":false,"error":"token_key_mismatch"}"#)
+            }
+            return (200, #"{"balance":5,"locked":0}"#)
+        }
+
+        let credits = try await client.spendCredits(5, reason: "test")
+        XCTAssertEqual(credits.balance, 5)
+        XCTAssertEqual(spendAttempts, 2, "original attempt + exactly one retry")
+
+        let paths = StubProtocol.seen.map(\.path)
+        // spendCredits(403) → (assertion challenge) → createOrFetchUser(re-mint)
+        // → (assertion challenge) → spendCredits(200)
+        XCTAssertEqual(paths, [
+            "/c0ffee000008", "/c0ffee000005",
+            "/c0ffee000008", "/c0ffee000001",
+            "/c0ffee000008", "/c0ffee000005",
+        ])
+        XCTAssertEqual(paths.filter { $0 == "/c0ffee000005" }.count, 2, "exactly 2 spendCredits attempts")
+        XCTAssertEqual(paths.filter { $0 == "/c0ffee000001" }.count, 1, "exactly 1 createOrFetchUser")
+        XCTAssertEqual(store.read(), "next-token", "stale user token replaced by the re-minted one")
     }
 }

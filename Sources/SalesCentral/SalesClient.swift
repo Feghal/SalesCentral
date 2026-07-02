@@ -731,6 +731,16 @@ public actor SalesClient {
                 return try await request(endpoint, method: method, body: body,
                                          attachUserToken: attachUserToken, isAttestRetry: true)
             }
+            // 403 token_key_mismatch: the user JWT is bound to a previous
+            // device key (e.g. after re-attestation) — the session is stale,
+            // not the key. Re-mint the JWT against the current key, retry once.
+            if http.statusCode == 403, err.error == "token_key_mismatch",
+               Self.assertedEndpoints.contains(endpoint), attachUserToken, !isAttestRetry {
+                config.tokenStore.clear()
+                _ = try await ensureUser()
+                return try await request(endpoint, method: method, body: body,
+                                         attachUserToken: attachUserToken, isAttestRetry: true)
+            }
             if http.statusCode == 401, !Self.attestErrorCodes.contains(err.error) {
                 config.tokenStore.clear()
                 currentUser = nil
