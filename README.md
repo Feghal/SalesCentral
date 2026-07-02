@@ -411,7 +411,7 @@ do {
 `SalesError.attestUnsupported` exists for API stability but the SDK no
 longer throws it from the normal request path — a device that can't run
 App Attest (most commonly the iOS **Simulator**) now runs as a sandbox
-identity instead. See [Simulator & sandbox mode](#app-attest).
+identity instead. See [Simulator & sandbox mode](#simulator--sandbox-mode).
 
 ## Custom token storage
 
