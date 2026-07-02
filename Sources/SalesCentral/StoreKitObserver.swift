@@ -23,24 +23,14 @@ final class StoreKitObserver: @unchecked Sendable {
         task = Task.detached(priority: .background) { [weak self] in
             for await update in StoreKit.Transaction.updates {
                 guard case .verified(let txn) = update, let client = self?.client else { continue }
-                // Skip transactions an explicit purchase() is already handling —
-                // otherwise both upload the SAME transaction concurrently and race
-                // on the server. purchase() finishes the txn itself.
-                guard await client.claimTransaction(String(txn.id)) else { continue }
-                // Upload Apple's SIGNED JWS (VerificationResult.jwsRepresentation),
-                // NOT the decoded Transaction.jsonRepresentation. Only the JWS carries
-                // the x5c certificate chain the server needs to verify the signature.
-                let jws = update.jwsRepresentation
-                do {
-                    _ = try await client.applyReceipts([jws])
-                    // We finish() ONLY after a successful upload. If the
-                    // upload fails (network, server down), Apple re-delivers
-                    // on next launch.
+                // uploadObservedTransaction claims the txn (so an explicit
+                // purchase() and this observer never upload the SAME one),
+                // uploads Apple's SIGNED JWS (only the JWS carries the x5c
+                // chain the server verifies), and on failure RELEASES the
+                // claim so a redelivery retries. We finish() ONLY after a
+                // successful upload — an unfinished txn is Apple's retry.
+                if await client.uploadObservedTransaction(id: String(txn.id), jws: update.jwsRepresentation) {
                     await txn.finish()
-                } catch {
-                    // Leave the transaction unfinished so it retries. The
-                    // server is idempotent on transactionId, so a retry
-                    // can't double-charge or double-grant.
                 }
             }
         }

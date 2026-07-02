@@ -91,6 +91,22 @@ public actor SalesClient {
         }
     }
 
+    /// Upload one observer-delivered transaction: claim → upload → unclaim on
+    /// failure. Returns true when the upload succeeded and the caller should
+    /// finish() the transaction. On failure the claim is released so the next
+    /// StoreKit redelivery (same session or next launch) retries the upload —
+    /// the server is idempotent on transactionId, so a retry can't double-apply.
+    func uploadObservedTransaction(id: String, jws: String) async -> Bool {
+        guard claimTransaction(id) else { return false }
+        do {
+            _ = try await applyReceipts([jws])
+            return true
+        } catch {
+            unclaimTransaction(id)
+            return false
+        }
+    }
+
     public init(_ config: SalesConfig, urlSession: URLSession = .shared) {
         self.config = config
         self.session = urlSession
