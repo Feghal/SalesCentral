@@ -407,6 +407,7 @@ do {
 | `endpoint_not_found` | wrong token in `SalesConfig.Tokens` | regenerate config from admin |
 | `product_not_registered` | uploaded a receipt for a product not in the admin | add the product on the admin's Products page |
 | `production_receipt_on_sandbox_user` | a sandbox identity (Simulator) presented a Production-environment receipt — per-receipt, inside `applied[]` | use Sandbox App Store receipts on the Simulator |
+| `ownership_boundary` | the receipt belongs to an account on the other side of the sandbox/real boundary — per-receipt, inside `applied[]` | expected only when a Simulator session applies a receipt a real user owns |
 
 `SalesError.attestUnsupported` exists for API stability but the SDK no
 longer throws it from the normal request path — a device that can't run
