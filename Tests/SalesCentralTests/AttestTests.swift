@@ -134,17 +134,18 @@ final class AttestTests: XCTestCase {
         XCTAssertFalse(StubProtocol.seen.contains { $0.path == "/c0ffee000008" }, "no challenge fetched")
     }
 
-    func testUnsupportedDeviceThrows() async {
+    func testUnsupportedDeviceRunsSandboxed() async throws {
         let store = InMemoryTokenStore()
         let mock = MockAttestService()
         mock.supported = false
         let client = makeClient(store: store, mock: mock)
-        do {
-            _ = try await client.ensureUser()
-            XCTFail("must throw")
-        } catch let e as SalesError {
-            guard case .attestUnsupported = e else { return XCTFail("wrong error: \(e)") }
-        } catch { XCTFail("wrong error type: \(error)") }
+        _ = try await client.ensureUser()   // must NOT throw
+
+        XCTAssertEqual(mock.generateKeyCalls, 0, "no key generation on unsupported platforms")
+        let create = StubProtocol.seen.last!
+        XCTAssertEqual(create.headers["x-attest-unsupported"], "1", "explicit sandbox signal sent")
+        XCTAssertNil(create.headers["x-attest-key-id"], "no attest headers")
+        XCTAssertFalse(StubProtocol.seen.contains { $0.path == "/c0ffee000008" }, "no challenge fetched")
     }
 
     func testUnknownKeyTriggersOneReattestThenStops() async throws {

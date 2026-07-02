@@ -19,8 +19,9 @@ public enum SalesError: Error, CustomStringConvertible, Sendable {
     case invalidState(String)
 
     /// App Attest is unavailable on this device (e.g. the iOS Simulator).
-    /// There is no fallback — run on a physical device, or point the SDK at
-    /// a dev server started with APP_ATTEST_BYPASS_IN_DEV=1.
+    /// `SalesClient` no longer throws this from its request path — such
+    /// platforms run as SANDBOX identities instead. Retained for API
+    /// stability and for direct misuse of the attest plumbing.
     case attestUnsupported
 
     public var description: String {

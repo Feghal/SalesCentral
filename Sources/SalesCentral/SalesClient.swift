@@ -608,6 +608,10 @@ public actor SalesClient {
     /// callers would each generate + register their own key.
     private var attestInFlight: Task<String, Error>?
 
+    /// One-time flag so the unattested warning logs once per process, not
+    /// once per call.
+    private var warnedUnattested = false
+
     private func fetchAttestChallenge() async throws -> String {
         let resp: ChallengeResponse = try await request(.attestChallenge, method: "POST", body: Empty(), attachUserToken: false)
         return resp.challenge
@@ -686,8 +690,20 @@ public actor SalesClient {
             bodyData = try encoder.encode(body)
         }
         if Self.assertedEndpoints.contains(endpoint) {
-            for (k, v) in try await attestHeaders(bodyData: bodyData ?? Data()) {
-                req.setValue(v, forHTTPHeaderField: k)
+            if attestService.isSupported {
+                for (k, v) in try await attestHeaders(bodyData: bodyData ?? Data()) {
+                    req.setValue(v, forHTTPHeaderField: k)
+                }
+            } else {
+                // This platform (e.g. the iOS Simulator) cannot App Attest.
+                // Signal it explicitly — the server quarantines the session
+                // as a SANDBOX identity: play-money credits, Sandbox-only
+                // receipts, excluded from production analytics.
+                req.setValue("1", forHTTPHeaderField: "x-attest-unsupported")
+                if !warnedUnattested {
+                    warnedUnattested = true
+                    SalesLog.warn(.sdk, "App Attest unavailable — running UNATTESTED. This identity is SANDBOX (excluded from production data). Use a physical device for production behavior.")
+                }
             }
         }
         if let bodyData {
