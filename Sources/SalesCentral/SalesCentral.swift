@@ -312,7 +312,17 @@ public enum SalesCentral {
                 _ = await shared.claimTransaction(String(txn.id))
                 // Upload the signed JWS (has x5c), not the decoded txn JSON.
                 let jws = verification.jwsRepresentation
-                let resp = try await shared.applyReceipt(jws)
+                let resp: ApplyResult
+                do {
+                    resp = try await shared.applyReceipt(jws)
+                } catch {
+                    // Upload failed (offline / server error). Release the claim
+                    // so the StoreKit observer can retry this transaction —
+                    // otherwise it stays claimed and unfinished, skipped by the
+                    // observer until the next cold launch.
+                    await shared.unclaimTransaction(String(txn.id))
+                    throw error
+                }
                 await txn.finish()
                 await store.syncAfterPurchase(user: resp.user)
                 // StoreKit can hand back an already-owned / expired entitlement

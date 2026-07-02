@@ -37,8 +37,13 @@ public final class SessionTracker {
             forName: UIApplication.didBecomeActiveNotification,
             object: nil, queue: .main
         ) { [weak self] _ in self?.foreground() })
+        // End the session only on TRUE backgrounding. willResignActive fires
+        // for transient interruptions too (Control Center, notification banner,
+        // incoming call, app switcher, permission dialogs), each followed by
+        // didBecomeActive — counting those as separate sessions would inflate
+        // sessionCount and drag avgSessionDurationSec down.
         observers.append(nc.addObserver(
-            forName: UIApplication.willResignActiveNotification,
+            forName: UIApplication.didEnterBackgroundNotification,
             object: nil, queue: .main
         ) { [weak self] _ in self?.background() })
         // Also flush on outright termination — best-effort.

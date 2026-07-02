@@ -80,6 +80,17 @@ public actor SalesClient {
         return true
     }
 
+    /// Release a previously-claimed transaction id so it can be re-claimed and
+    /// re-uploaded. Call this when an upload attempt fails: otherwise the id
+    /// stays claimed for the process lifetime and the StoreKit observer (the
+    /// retry path) skips it forever, stranding a paid transaction until the
+    /// next cold launch.
+    func unclaimTransaction(_ id: String) {
+        if claimedTransactionIDs.remove(id) != nil {
+            claimedTransactionOrder.removeAll { $0 == id }
+        }
+    }
+
     public init(_ config: SalesConfig, urlSession: URLSession = .shared) {
         self.config = config
         self.session = urlSession
@@ -566,8 +577,19 @@ public actor SalesClient {
                 ?? APIError(error: "http_\(http.statusCode)", message: nil)
             SalesLog.warn(.http, "← \(http.statusCode) \(endpoint) (\(ms)ms) error=\(err.error)\(err.message.map { " message=\($0)" } ?? "")")
             // 401 → user token is invalid. Wipe it so the next call starts
-            // fresh via /users instead of looping on bad credentials.
-            if http.statusCode == 401 { config.tokenStore.clear() }
+            // fresh via /users instead of looping on bad credentials. Also drop
+            // the cached user + derived caches: otherwise the app keeps showing
+            // the last-known (possibly premium) state the server just
+            // invalidated. We keep the clientId so the next ensureUser()
+            // de-dupes back to the SAME guest rather than minting a new one —
+            // a 401 is an expired session, not an identity reset.
+            if http.statusCode == 401 {
+                config.tokenStore.clear()
+                currentUser = nil
+                paywallsByKey = [:]
+                remoteConfigCache = [:]
+                experimentAssignments = [:]
+            }
             throw SalesError.http(status: http.statusCode, code: err.error, message: err.message)
         }
         SalesLog.debug(.http, "← \(http.statusCode) \(endpoint) (\(ms)ms, \(data.count) bytes)")
