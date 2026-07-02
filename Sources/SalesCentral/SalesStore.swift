@@ -142,8 +142,8 @@ public final class SalesStore: ObservableObject {
     }
 
     @discardableResult
-    public func spendCredits(_ amount: Int, reason: String) async throws -> Credits {
-        let credits = try await client.spendCredits(amount, reason: reason)
+    public func spendCredits(_ amount: Int, reason: String, idempotencyKey: String? = nil) async throws -> Credits {
+        let credits = try await client.spendCredits(amount, reason: reason, idempotencyKey: idempotencyKey)
         // Mutate `user` so views update without a re-fetch.
         if var u = user {
             u = SalesUser(

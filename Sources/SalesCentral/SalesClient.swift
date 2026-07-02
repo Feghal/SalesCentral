@@ -421,12 +421,18 @@ public actor SalesClient {
     ///
     /// Returns the full post-spend `Credits` state (spendable balance plus
     /// any locked drip pool).
+    ///
+    /// Pass an `idempotencyKey` unique to the intended charge to make retries
+    /// safe: if a spend times out and you re-send it with the same key, the
+    /// server recognizes the replay and does NOT debit again (it returns the
+    /// balance from the single original debit). Without a key, every call
+    /// that reaches the server debits.
     @discardableResult
-    public func spendCredits(_ amount: Int, reason: String) async throws -> Credits {
-        struct Body: Encodable { let amount: Int; let reason: String }
+    public func spendCredits(_ amount: Int, reason: String, idempotencyKey: String? = nil) async throws -> Credits {
+        struct Body: Encodable { let amount: Int; let reason: String; let idempotencyKey: String? }
         let credits: Credits = try await request(
             .spendCredits, method: "POST",
-            body: Body(amount: amount, reason: reason), attachUserToken: true
+            body: Body(amount: amount, reason: reason, idempotencyKey: idempotencyKey), attachUserToken: true
         )
         if let u = currentUser {
             currentUser = SalesUser(
@@ -554,7 +560,29 @@ public actor SalesClient {
 
     private struct Empty: Encodable {}
     private struct EmptyOK: Decodable { let ok: Bool? }
-    private struct APIError: Decodable { let error: String; let message: String? }
+    private struct APIError: Decodable {
+        let error: String
+        let message: String?
+        /// Some error responses carry fresh state the app should keep — e.g.
+        /// a 409 already_claimed bundles the retention status (with
+        /// nextClaimAt) so the UI can say "come back at X" without another
+        /// round trip.
+        let retention: RetentionStatus?
+
+        init(error: String, message: String?) {
+            self.error = error
+            self.message = message
+            self.retention = nil
+        }
+
+        private enum CodingKeys: String, CodingKey { case error, message, retention }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.error = (try? c.decode(String.self, forKey: .error)) ?? "unknown"
+            self.message = try? c.decode(String.self, forKey: .message)
+            self.retention = try? c.decode(RetentionStatus.self, forKey: .retention)
+        }
+    }
 
     private func request<B: Encodable, T: Decodable>(
         _ endpoint: SalesConfig.Endpoint,
@@ -592,6 +620,9 @@ public actor SalesClient {
             let err = (try? decoder.decode(APIError.self, from: data))
                 ?? APIError(error: "http_\(http.statusCode)", message: nil)
             SalesLog.warn(.http, "← \(http.statusCode) \(endpoint) (\(ms)ms) error=\(err.error)\(err.message.map { " message=\($0)" } ?? "")")
+            // Ingest state the server attached to the error body before
+            // throwing — the response is authoritative even on a 4xx.
+            if let retention = err.retention { retentionStatus = retention }
             // 401 → user token is invalid. Wipe it so the next call starts
             // fresh via /users instead of looping on bad credentials. Also drop
             // the cached user + derived caches: otherwise the app keeps showing
