@@ -4,6 +4,19 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.2.0] - 2026-07-03
+
+### Added
+- **Spend receipts.** `spendCredits` responses now populate two new optional
+  `Credits` fields: `transactionId` (the debit's ledger id) and `receipt`
+  (a short-lived signed proof of the debit, HS256 JWS). For work delivered
+  by your own backend, charge first and send the `receipt` with the work
+  request; the backend verifies it offline with the receipt signing secret
+  from the admin panel (App Detail → Credentials) and delivers only against
+  a valid, unconsumed receipt. Closes the tampered-client hole where
+  server-delivered work could be consumed without ever charging. Both
+  fields are `nil` on non-spend sources of `Credits`; no API breakage.
+
 ## [1.1.5] - 2026-06-23
 
 ### Fixed

@@ -88,6 +88,24 @@ final class SalesCentralTests: XCTestCase {
         XCTAssertEqual(a.locale?.language, "ja")
     }
 
+    func testCreditsDecodesSpendReceiptFields() throws {
+        // Shape of a POST credits/spend response (Task: spend receipts).
+        let json = #"{"ok":true,"transactionId":"led-1","receipt":"eyJhbGciOiJIUzI1NiJ9.e30.sig","balance":50,"locked":0}"#
+        let credits = try JSONDecoder().decode(Credits.self, from: Data(json.utf8))
+        XCTAssertEqual(credits.balance, 50)
+        XCTAssertEqual(credits.transactionId, "led-1")
+        XCTAssertEqual(credits.receipt, "eyJhbGciOiJIUzI1NiJ9.e30.sig")
+    }
+
+    func testCreditsWithoutReceiptFieldsDecodesNil() throws {
+        // Non-spend sources of Credits (user fetch, claimReward) omit both.
+        let json = #"{"balance":10,"locked":3}"#
+        let credits = try JSONDecoder().decode(Credits.self, from: Data(json.utf8))
+        XCTAssertEqual(credits.balance, 10)
+        XCTAssertNil(credits.transactionId)
+        XCTAssertNil(credits.receipt)
+    }
+
     /// `SalesClient.setUserProperties` posts the right wire shape to the
     /// `createOrFetchUser` endpoint: a body of `{ "properties": {...} }`
     /// where string / number / bool / null are each encoded correctly.

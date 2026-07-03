@@ -110,15 +110,26 @@ public struct Credits: Decodable, Sendable, Equatable {
     /// When the next locked tranche becomes spendable. nil when nothing is
     /// locked.
     public let nextUnlockAt: Date?
+    /// Ledger row id of the debit. Present only on `spendCredits` responses.
+    public let transactionId: String?
+    /// Signed proof of the debit (compact HS256 JWS, ~10-minute expiry).
+    /// Present only on `spendCredits` responses. For server-delivered work,
+    /// forward it to YOUR backend, which verifies it offline with the
+    /// receipt signing secret from the admin panel — see the README's
+    /// "Charge credits" section.
+    public let receipt: String?
 
-    public init(balance: Int, locked: Int = 0, nextUnlockAt: Date? = nil) {
+    public init(balance: Int, locked: Int = 0, nextUnlockAt: Date? = nil,
+                transactionId: String? = nil, receipt: String? = nil) {
         self.balance = balance
         self.locked = locked
         self.nextUnlockAt = nextUnlockAt
+        self.transactionId = transactionId
+        self.receipt = receipt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case balance, locked, nextUnlockAt
+        case balance, locked, nextUnlockAt, transactionId, receipt
     }
 
     public init(from decoder: Decoder) throws {
@@ -127,6 +138,8 @@ public struct Credits: Decodable, Sendable, Equatable {
         // Tolerate older servers that only send `balance`.
         self.locked = (try? c.decode(Int.self, forKey: .locked)) ?? 0
         self.nextUnlockAt = try? c.decode(Date.self, forKey: .nextUnlockAt)
+        self.transactionId = try? c.decode(String.self, forKey: .transactionId)
+        self.receipt = try? c.decode(String.self, forKey: .receipt)
     }
 }
 

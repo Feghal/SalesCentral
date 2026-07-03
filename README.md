@@ -16,7 +16,7 @@ Money-touching calls are further protected by Apple App Attest — see
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Feghal/SalesCentral.git", from: "1.1.5")
+    .package(url: "https://github.com/Feghal/SalesCentral.git", from: "1.2.0")
 ],
 targets: [
     .target(name: "MyApp", dependencies: [
