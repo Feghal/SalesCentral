@@ -238,16 +238,34 @@ let products = try await paywall.loadProducts()   // [Product] in admin order
 let label: String = SalesCentral.shared.remoteConfig("cta_label", default: "Continue")
 ```
 
-### Charge credits after the work succeeds
+### Charge credits
 
-Gate locally on the cached balance, do the work, then charge on success with
-an idempotency key — a timed-out retry with the same key never double-debits:
+**On-device work** — gate locally on the cached balance, do the work, then
+charge on success with an idempotency key (a timed-out retry with the same
+key never double-debits). The local gate is UX, not security: a jailbroken
+device can bypass it, the same way it can pirate any client-side feature.
 
 ```swift
 guard SalesCentral.store.creditBalance >= 50 else { return showPaywall() }
 let intentKey = UUID().uuidString
-let result = try await runDiffusion()
-try await SalesCentral.shared.spendCredits(50, reason: "image_gen", idempotencyKey: intentKey)
+let result = try await runLocalRender()
+try await SalesCentral.shared.spendCredits(50, reason: "render", idempotencyKey: intentKey)
+```
+
+**Server-delivered work** — charge FIRST, then send the returned
+`credits.receipt` (a signed, 10-minute proof of the debit) to your backend
+with the work request. Your backend verifies it offline with the receipt
+signing secret from the admin panel (App Detail → Credentials — never ship
+that secret in the app) and delivers only against a valid, unconsumed
+receipt (`jti` == `transactionId`; consume it on successful delivery). A
+retry with the same idempotency key re-issues the same-`jti` receipt
+without double-debiting. See INTEGRATION.md → "Recommended patterns:
+charging credits" for the backend snippet.
+
+```swift
+let credits = try await SalesCentral.shared.spendCredits(
+    50, reason: "image_gen", idempotencyKey: intentKey)
+let image = try await myBackend.generate(prompt: prompt, receipt: credits.receipt!)
 ```
 
 There's no server-side hold/escrow — the key only protects one intent from
@@ -312,7 +330,7 @@ Underlying client (`SalesCentral.shared.…`):
 | `applyReceipts(_:)` / `applyReceipt(_:)` | Upload signed receipts; server validates + applies effects. Idempotent. |
 | `configuredProducts` / `effects(forProductID:)` | Registered catalog (`[SalesProduct]`) + per-product effect lookup, refreshed by `ensureUser` / `restorePurchases`. |
 | `currentSubscription()` | Source of truth for "is user paid right now?". |
-| `spendCredits(_:reason:idempotencyKey:)` | Debit credits; returns post-spend `Credits` (incl. any drip-locked pool); throws 402 / `insufficient_credits` if not enough. Pass `idempotencyKey:` so a retry after a timeout never double-debits. |
+| `spendCredits(_:reason:idempotencyKey:)` | Debit credits; returns post-spend `Credits` (incl. any drip-locked pool) plus `transactionId` and a signed `receipt` — proof-of-debit your backend verifies before doing server-delivered work; throws 402 / `insufficient_credits` if not enough. Pass `idempotencyKey:` so a retry after a timeout never double-debits (and re-issues the same receipt). |
 | `claimReward()` | Claim the daily retention reward (login credits / streak) configured in the admin. One claim per UTC day — call it on app open or behind a "Claim" button. Check `retentionStatus` / `store.rewardAvailable` first. |
 | `recordSession(start:end:durationSec:)` | Record a finished foreground session (or use `SessionTracker`). |
 | `track(_:properties:)` / `trackBatch(_:)` | Free-form analytics events. |
