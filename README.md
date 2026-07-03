@@ -259,13 +259,20 @@ signing secret from the admin panel (App Detail → Credentials — never ship
 that secret in the app) and delivers only against a valid, unconsumed
 receipt (`jti` == `transactionId`; consume it on successful delivery). A
 retry with the same idempotency key re-issues the same-`jti` receipt
-without double-debiting. See INTEGRATION.md → "Recommended patterns:
-charging credits" for the backend snippet.
+without double-debiting. Also verify the receipt's `amount` and `reason`
+match the work being requested — a valid signature alone doesn't prove the
+right price was paid. See INTEGRATION.md → "Recommended patterns: charging
+credits" for the backend snippet.
 
 ```swift
+let intentKey = UUID().uuidString
 let credits = try await SalesCentral.shared.spendCredits(
     50, reason: "image_gen", idempotencyKey: intentKey)
-let image = try await myBackend.generate(prompt: prompt, receipt: credits.receipt!)
+guard let receipt = credits.receipt else {
+    // server didn't issue a receipt — treat as payment-unproven and refresh/retry
+    throw PaywallError.missingReceipt
+}
+let image = try await myBackend.generate(prompt: prompt, receipt: receipt)
 ```
 
 There's no server-side hold/escrow — the key only protects one intent from
