@@ -663,6 +663,10 @@ public actor SalesClient {
         }
         let bodyHash = Data(SHA256.hash(data: bodyData))
         let clientDataHash = Data(SHA256.hash(data: challengeData + bodyHash))
+        // Diagnostic: log the exact bytes the device hashed so they can be
+        // compared against the server's rawBody (see ATTEST_DEBUG). A
+        // divergence here vs the server means the body changed in transit.
+        SalesLog.debug(.http, "attest-debug body: len=\(bodyData.count) sha=\(bodyHash.prefix(8).map { String(format: "%02x", $0) }.joined()) utf8=\(String(data: bodyData.prefix(200), encoding: .utf8) ?? "<non-utf8>")")
         let assertion = try await attestService.generateAssertion(keyId, clientDataHash: clientDataHash)
         return [
             "x-attest-key-id": keyId,
