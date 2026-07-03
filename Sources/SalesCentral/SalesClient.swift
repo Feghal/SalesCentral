@@ -663,9 +663,25 @@ public actor SalesClient {
         }
         let bodyHash = Data(SHA256.hash(data: bodyData))
         let clientDataHash = Data(SHA256.hash(data: challengeData + bodyHash))
-        let assertion = try await attestService.generateAssertion(keyId, clientDataHash: clientDataHash)
+
+        var activeKeyId = keyId
+        let assertion: Data
+        do {
+            assertion = try await attestService.generateAssertion(activeKeyId, clientDataHash: clientDataHash)
+        } catch {
+            // The stored key can no longer sign — its Secure Enclave key was
+            // invalidated (device restore, key rotation, container reset). The
+            // keyId persists in the Keychain across reinstalls, so this would
+            // otherwise be a permanent wall. Discard it, attest a fresh key,
+            // and sign once more. The challenge above is not consumed until the
+            // asserted request reaches the server, so it stays valid here.
+            SalesLog.warn(.sdk, "generateAssertion failed for stored key (\(error)) — re-attesting a fresh key")
+            config.tokenStore.clearAttestKeyId()
+            activeKeyId = try await ensureAttestedKeyId()
+            assertion = try await attestService.generateAssertion(activeKeyId, clientDataHash: clientDataHash)
+        }
         return [
-            "x-attest-key-id": keyId,
+            "x-attest-key-id": activeKeyId,
             "x-attest-challenge": challenge,
             "x-attest-assertion": assertion.base64EncodedString(),
         ]

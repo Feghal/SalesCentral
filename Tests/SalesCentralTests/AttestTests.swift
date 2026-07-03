@@ -21,8 +21,14 @@ final class AttestTests: XCTestCase {
         func attestKey(_ keyId: String, clientDataHash: Data) async throws -> Data {
             Data("attestation-for-\(keyId)".utf8)
         }
+        /// When set, generateAssertion throws for this keyId — simulating a
+        /// Secure Enclave key that was invalidated (device restore / rotation).
+        var failAssertionForKeyId: String?
         func generateAssertion(_ keyId: String, clientDataHash: Data) async throws -> Data {
-            Data("assertion-\(clientDataHash.base64EncodedString())".utf8)
+            if let bad = failAssertionForKeyId, keyId == bad {
+                throw SalesError.invalidState("mock: enclave key invalidated")
+            }
+            return Data("assertion-\(clientDataHash.base64EncodedString())".utf8)
         }
     }
 
@@ -111,6 +117,25 @@ final class AttestTests: XCTestCase {
         XCTAssertEqual(create.headers["x-attest-key-id"], "mock-key-id")
         XCTAssertNotNil(create.headers["x-attest-challenge"])
         XCTAssertNotNil(create.headers["x-attest-assertion"])
+    }
+
+    func testInvalidStoredKeyReattestsAndRecovers() async throws {
+        // The stored keyId points to an Enclave key that can no longer sign
+        // (device restore / container reset). The keyId survives in the
+        // Keychain, so without self-heal this is a permanent failure.
+        let store = InMemoryTokenStore()
+        store.writeAttestKeyId("stale-key-id")
+        let mock = MockAttestService()
+        mock.failAssertionForKeyId = "stale-key-id"
+        let client = makeClient(store: store, mock: mock)
+
+        _ = try await client.ensureUser()   // must self-heal, not throw
+
+        XCTAssertEqual(mock.generateKeyCalls, 1, "generated exactly one fresh key")
+        XCTAssertEqual(store.readAttestKeyId(), "mock-key-id", "stale key replaced")
+        let create = StubProtocol.seen.last!
+        XCTAssertEqual(create.path, "/c0ffee000001")
+        XCTAssertEqual(create.headers["x-attest-key-id"], "mock-key-id", "asserted with fresh key")
     }
 
     func testStoredKeySkipsAttestation() async throws {
