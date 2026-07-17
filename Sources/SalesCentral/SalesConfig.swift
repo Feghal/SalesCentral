@@ -22,15 +22,23 @@ public struct SalesConfig: Sendable {
     /// Per-operation tokens. Each is a 12-char hex string.
     public let tokens: Tokens
 
+    /// Integrate the SDK for everything EXCEPT transactions. When true the
+    /// transaction tokens (`applyPurchases`, `currentSubscription`,
+    /// `spendCredits`, `claimReward`) are optional, the SDK never starts
+    /// the StoreKit observer / product prefetch / subscription fetch, and
+    /// transaction APIs throw `SalesError.invalidState("analytics_only")`.
+    public let analyticsOnly: Bool
+
     /// Optional override for the user-token storage backend. Defaults to
     /// the system Keychain.
     public let tokenStore: TokenStore
 
-    public init(baseURL: URL, apiKey: String, tokens: Tokens, tokenStore: TokenStore? = nil) {
+    public init(baseURL: URL, apiKey: String, tokens: Tokens, tokenStore: TokenStore? = nil, analyticsOnly: Bool = false) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.tokens = tokens
         self.tokenStore = tokenStore ?? KeychainTokenStore.shared
+        self.analyticsOnly = analyticsOnly
     }
 
     /// Load configuration from the app bundle. Two sources are tried, in
@@ -105,7 +113,9 @@ public struct SalesConfig: Sendable {
     // MARK: - Plist parsing
     // ------------------------------------------------------------------
 
-    private static func parse(_ raw: [String: Any], source: String) -> SalesConfig {
+    /// Internal (not private) so the test target can exercise plist-shaped
+    /// dictionaries without bundling fixture plists.
+    static func parse(_ raw: [String: Any], source: String) -> SalesConfig {
         guard let urlString = raw["baseURL"] as? String, !urlString.isEmpty,
               let url = URL(string: urlString) else {
             preconditionFailure("\(source): 'baseURL' is missing or not a valid URL.")
@@ -116,10 +126,18 @@ public struct SalesConfig: Sendable {
         guard let t = raw["tokens"] as? [String: String] else {
             preconditionFailure("\(source): 'tokens' must be a Dictionary of String → String.")
         }
+        let analyticsOnly = (raw["analyticsOnly"] as? Bool) ?? false
         func need(_ key: String) -> String {
             guard let v = t[key], !v.isEmpty else {
                 preconditionFailure("\(source): 'tokens.\(key)' is missing.")
             }
+            return v
+        }
+        // Under analyticsOnly the transaction tokens are optional; empty
+        // strings are treated as absent so a half-edited plist can't
+        // produce a token URL of "".
+        func opt(_ key: String) -> String? {
+            guard let v = t[key], !v.isEmpty else { return nil }
             return v
         }
         return SalesConfig(
@@ -128,17 +146,16 @@ public struct SalesConfig: Sendable {
             tokens: Tokens(
                 createOrFetchUser:   need("createOrFetchUser"),
                 restoreUser:         need("restoreUser"),
-                applyPurchases:      need("applyPurchases"),
-                currentSubscription: need("currentSubscription"),
-                spendCredits:        need("spendCredits"),
+                applyPurchases:      analyticsOnly ? opt("applyPurchases")      : need("applyPurchases"),
+                currentSubscription: analyticsOnly ? opt("currentSubscription") : need("currentSubscription"),
+                spendCredits:        analyticsOnly ? opt("spendCredits")        : need("spendCredits"),
                 recordSession:       need("recordSession"),
                 recordEvent:         need("recordEvent"),
                 attestChallenge:     need("attestChallenge"),
                 attestKey:           need("attestKey"),
-                // Optional — older plists predate retention rewards. Calling
-                // claimReward() without it throws a descriptive invalidState.
                 claimReward:         t["claimReward"]
-            )
+            ),
+            analyticsOnly: analyticsOnly
         )
     }
 
@@ -148,9 +165,9 @@ public struct SalesConfig: Sendable {
         switch endpoint {
         case .createOrFetchUser:   token = tokens.createOrFetchUser
         case .restoreUser:         token = tokens.restoreUser
-        case .applyPurchases:      token = tokens.applyPurchases
-        case .currentSubscription: token = tokens.currentSubscription
-        case .spendCredits:        token = tokens.spendCredits
+        case .applyPurchases:      token = tokens.applyPurchases ?? ""      // guarded in SalesClient
+        case .currentSubscription: token = tokens.currentSubscription ?? "" // guarded in SalesClient
+        case .spendCredits:        token = tokens.spendCredits ?? ""        // guarded in SalesClient
         case .claimReward:         token = tokens.claimReward ?? "" // guarded in SalesClient.claimReward()
         case .recordSession:       token = tokens.recordSession
         case .recordEvent:         token = tokens.recordEvent
@@ -180,9 +197,10 @@ public struct SalesConfig: Sendable {
     public struct Tokens: Sendable, Codable, Equatable {
         public let createOrFetchUser: String
         public let restoreUser: String
-        public let applyPurchases: String
-        public let currentSubscription: String
-        public let spendCredits: String
+        /// Optional under `analyticsOnly` — absent from analytics-only configs.
+        public let applyPurchases: String?
+        public let currentSubscription: String?
+        public let spendCredits: String?
         public let recordSession: String
         public let recordEvent: String
         public let attestChallenge: String
@@ -195,9 +213,9 @@ public struct SalesConfig: Sendable {
         public init(
             createOrFetchUser: String,
             restoreUser: String,
-            applyPurchases: String,
-            currentSubscription: String,
-            spendCredits: String,
+            applyPurchases: String? = nil,
+            currentSubscription: String? = nil,
+            spendCredits: String? = nil,
             recordSession: String,
             recordEvent: String,
             attestChallenge: String,
