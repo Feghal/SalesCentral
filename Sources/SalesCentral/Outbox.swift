@@ -81,8 +81,16 @@ struct Outbox: Sendable {
     }
 
     /// Put a failed batch back at the FRONT, restoring the pre-drain order.
-    mutating func requeue(_ batch: OutboxBatch) {
+    /// The cap holds here too: if re-inserting would exceed `cap`, the
+    /// OLDEST items — the head of the requeued batch itself — are dropped
+    /// (recency wins, same policy as `append`). Returns the dropped count
+    /// so the caller can log the loss.
+    @discardableResult
+    mutating func requeue(_ batch: OutboxBatch) -> Int {
         items.insert(contentsOf: batch.items, at: 0)
+        let overflow = items.count - Self.cap
+        if overflow > 0 { items.removeFirst(overflow) }
+        return max(0, overflow)
     }
 
     mutating func removeAll() { items = [] }

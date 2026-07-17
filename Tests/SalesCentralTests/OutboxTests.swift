@@ -70,6 +70,28 @@ final class OutboxTests: XCTestCase {
         XCTAssertEqual(box.items, [event(1), event(2), session(3)])
     }
 
+    func testRequeueOverCapDropsEntireBatchWhenQueueRefilled() {
+        var box = Outbox()
+        box.append((0..<Outbox.cap).map(event))     // e0..e499 — full
+        let batch = box.drainNext()!                 // e0..e49 drained; 450 left
+        box.append((1000..<1050).map(event))         // refilled to 500
+        let dropped = box.requeue(batch)             // 550 → clamp to 500
+        XCTAssertEqual(dropped, 50)
+        XCTAssertEqual(box.count, Outbox.cap)
+        XCTAssertEqual(box.items.first, event(50), "the whole requeued batch was the oldest — dropped")
+    }
+
+    func testRequeuePartialOverCapDropsOnlyOldestOfBatch() {
+        var box = Outbox()
+        box.append((0..<Outbox.cap).map(event))     // e0..e499 — full
+        let batch = box.drainNext()!                 // e0..e49 drained; 450 left
+        box.append((1000..<1030).map(event))         // 480 total
+        let dropped = box.requeue(batch)             // 530 → clamp to 500
+        XCTAssertEqual(dropped, 30)
+        XCTAssertEqual(box.count, Outbox.cap)
+        XCTAssertEqual(box.items.first, event(30), "e0..e29 dropped; e30 is the oldest survivor")
+    }
+
     func testRemoveAllEmptiesTheQueue() {
         var box = Outbox()
         box.append([event(1), session(2)])
