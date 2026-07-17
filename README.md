@@ -469,7 +469,8 @@ SalesCentral.configure(
         baseURL: base.baseURL,
         apiKey:  base.apiKey,
         tokens:  base.tokens,
-        tokenStore: InMemoryTokenStore()   // testing only
+        tokenStore: InMemoryTokenStore(),  // testing only
+        analyticsOnly: base.analyticsOnly
     )
 )
 await SalesCentral.start()
