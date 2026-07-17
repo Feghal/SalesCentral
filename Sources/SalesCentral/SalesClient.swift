@@ -655,6 +655,12 @@ public actor SalesClient {
             do {
                 try await sendBatch(batch)
             } catch where Self.isRetryableForOutbox(error) {
+                // Known narrow race: clearUser() during this await wipes the
+                // outbox, and this requeue can resurrect the abandoned
+                // identity's batch. Distinguishing that from a mid-flight
+                // 401 token-clear (whose items MUST stay queued) needs an
+                // identity generation counter — accepted for analytics-grade
+                // data.
                 let dropped = outbox.requeue(batch)
                 if dropped > 0 {
                     SalesLog.warn(.outbox, "outbox over cap during requeue — dropped \(dropped) oldest item(s)")
@@ -715,8 +721,9 @@ public actor SalesClient {
     }
 
     /// Log multiple events at once. Same queueing behavior as `track`.
-    /// Max 50 events per server call — larger inputs are chunked by the
-    /// outbox flush.
+    /// Max 50 events per call on the DIRECT send path — the server
+    /// truncates anything beyond 50. Only batches that go through the
+    /// outbox (queued while unsendable) are chunked at 50 on flush.
     public func trackBatch(_ events: [(name: String, properties: [String: AnyEncodable])]) async {
         let now = Date()
         do {
