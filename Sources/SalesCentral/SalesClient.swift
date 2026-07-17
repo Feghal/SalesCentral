@@ -65,6 +65,18 @@ public actor SalesClient {
     /// Test hook: is the StoreKit auto-uploader running?
     var isObservingTransactions: Bool { observer != nil }
 
+    /// Analytics calls that couldn't be sent yet (no user, offline, 5xx).
+    /// See Outbox.swift. All access is actor-isolated.
+    private var outbox = Outbox()
+    /// Single-flight latch for `flushOutbox()`; concurrent triggers coalesce.
+    private var isFlushingOutbox = false
+    /// Watches connectivity while the outbox is non-empty. Fresh instance
+    /// per backlog episode — NWPathMonitor cannot restart after cancel().
+    private var outboxReconnectMonitor: NetworkMonitor?
+
+    /// Test hook: how many analytics calls are queued.
+    var pendingAnalyticsCount: Int { outbox.count }
+
     /// First statement of every transaction API. Analytics-only integrations
     /// must never reach the transaction endpoints or StoreKit.
     private func guardTransactionsAllowed(_ operation: String) throws {
@@ -174,6 +186,9 @@ public actor SalesClient {
             attachUserToken: config.tokenStore.read() != nil
         )
         absorbBundle(resp)
+        // A token now exists — deliver anything queued pre-user. Fire and
+        // forget so bootstrap latency isn't extended by the flush.
+        if !outbox.isEmpty { Task { await self.flushOutbox() } }
         return resp.user
     }
 
@@ -312,6 +327,7 @@ public actor SalesClient {
         )
         let resp: RestoreResult = try await request(.restoreUser, method: "POST", body: body, attachUserToken: false)
         config.tokenStore.write(resp.token)
+        if !outbox.isEmpty { Task { await self.flushOutbox() } }
         currentUser = resp.user
         if let prods = resp.products {
             configuredProducts = prods
@@ -344,6 +360,8 @@ public actor SalesClient {
         paywallsByKey = [:]
         remoteConfigCache = [:]
         experimentAssignments = [:]
+        outbox.removeAll()
+        stopOutboxReconnectMonitorIfDrained()
     }
 
     // ------------------------------------------------------------------
@@ -515,46 +533,197 @@ public actor SalesClient {
     }
 
     // ------------------------------------------------------------------
+    // MARK: - Analytics outbox
+    // ------------------------------------------------------------------
+
+    /// Shared wire shapes for direct sends AND flushes, so both paths are
+    /// byte-identical on the wire. recordEvent accepts the batch form for a
+    /// single event too.
+    fileprivate struct EventBody: Encodable {
+        let name: String
+        let properties: [String: AnyEncodable]
+        let occurredAt: Date
+    }
+    fileprivate struct EventBatchBody: Encodable { let events: [EventBody] }
+    fileprivate struct SessionBody: Encodable {
+        let startedAt: Date
+        let endedAt: Date
+        let durationSec: Int?
+    }
+
+    /// Errors worth retrying later: transport failures, server errors, and
+    /// auth losses that a future ensureUser() repairs. Everything else
+    /// (validation-class 4xx) is permanent — retrying can never succeed.
+    private static func isRetryableForOutbox(_ error: Error) -> Bool {
+        switch error {
+        case SalesError.network: return true
+        case SalesError.http(let status, _, _): return status >= 500 || status == 401
+        default: return false
+        }
+    }
+
+    /// Core path for track / trackBatch / recordSession. Returns normally
+    /// when the items were sent OR queued; throws only on permanent
+    /// (non-retryable) rejections of a direct send.
+    private func sendOrEnqueue(_ newItems: [OutboxItem]) async throws {
+        guard !newItems.isEmpty else { return }
+        // FIFO guarantee: while backlogged OR mid-flush, new items go BEHIND
+        // the queue (an in-flight flush pass picks them up via drainNext).
+        if isFlushingOutbox || !outbox.isEmpty {
+            enqueueToOutbox(newItems, reason: "backlog ahead")
+            await flushOutbox()
+            return
+        }
+        // No user yet → queue locally without a doomed 401 round-trip.
+        guard config.tokenStore.read() != nil else {
+            enqueueToOutbox(newItems, reason: "no user yet")
+            return
+        }
+        do {
+            try await sendBatch(batchFor(newItems))
+        } catch {
+            if Self.isRetryableForOutbox(error) {
+                enqueueToOutbox(newItems, reason: "send failed: \(error)")
+                return
+            }
+            throw error
+        }
+    }
+
+    /// Homogeneous by construction: each public call produces either events
+    /// or a single session, never a mix.
+    private func batchFor(_ items: [OutboxItem]) -> OutboxBatch {
+        if case .session = items[0] { return .session(items[0]) }
+        return .events(items)
+    }
+
+    private func enqueueToOutbox(_ items: [OutboxItem], reason: String) {
+        let dropped = outbox.append(items)
+        if dropped > 0 {
+            SalesLog.warn(.outbox, "outbox over cap — dropped \(dropped) oldest item(s)")
+        }
+        SalesLog.info(.outbox, "queued \(items.count) item(s) (\(reason)) — \(outbox.count) pending")
+        startOutboxReconnectMonitorIfNeeded()
+    }
+
+    /// Send one drained unit. A 2xx whose body fails to decode is SUCCESS
+    /// for queue purposes — the server recorded it; never retry it.
+    private func sendBatch(_ batch: OutboxBatch) async throws {
+        do {
+            switch batch {
+            case .events(let items):
+                let events = items.compactMap { item -> EventBody? in
+                    guard case let .event(name, properties, occurredAt) = item else {
+                        assertionFailure("events batch holds a session")
+                        return nil
+                    }
+                    return EventBody(name: name, properties: properties, occurredAt: occurredAt)
+                }
+                let _: EmptyOK = try await request(
+                    .recordEvent, method: "POST",
+                    body: EventBatchBody(events: events), attachUserToken: true
+                )
+            case .session(let item):
+                guard case let .session(start, end, durationSec) = item else {
+                    assertionFailure("session batch holds an event")
+                    return
+                }
+                let _: EmptyOK = try await request(
+                    .recordSession, method: "POST",
+                    body: SessionBody(startedAt: start, endedAt: end, durationSec: durationSec),
+                    attachUserToken: true
+                )
+            }
+        } catch SalesError.decoding(let detail) {
+            SalesLog.warn(.outbox, "2xx response failed to decode (\(detail)) — treating as sent")
+        }
+    }
+
+    /// Drain the outbox in FIFO order. Single-flight; a pass stops early on
+    /// a retryable failure (the failed batch requeues at the FRONT) or when
+    /// no user token exists yet.
+    func flushOutbox() async {
+        guard !isFlushingOutbox, !outbox.isEmpty else { return }
+        guard config.tokenStore.read() != nil else {
+            SalesLog.debug(.outbox, "flush skipped — no user token yet")
+            return
+        }
+        isFlushingOutbox = true
+        defer { isFlushingOutbox = false }
+        SalesLog.info(.outbox, "flushing \(outbox.count) queued item(s)")
+        while let batch = outbox.drainNext() {
+            do {
+                try await sendBatch(batch)
+            } catch where Self.isRetryableForOutbox(error) {
+                let dropped = outbox.requeue(batch)
+                if dropped > 0 {
+                    SalesLog.warn(.outbox, "outbox over cap during requeue — dropped \(dropped) oldest item(s)")
+                }
+                SalesLog.warn(.outbox, "flush stopped — retryable failure, \(outbox.count) item(s) kept: \(error)")
+                break
+            } catch {
+                SalesLog.warn(.outbox, "dropped \(batch.items.count) item(s) — permanent rejection: \(error)")
+            }
+        }
+        stopOutboxReconnectMonitorIfDrained()
+    }
+
+    private func startOutboxReconnectMonitorIfNeeded() {
+        guard outboxReconnectMonitor == nil, !outbox.isEmpty else { return }
+        let m = NetworkMonitor()
+        m.onReconnect = { [weak self] in
+            Task { await self?.flushOutbox() }
+        }
+        outboxReconnectMonitor = m
+        m.start()
+        SalesLog.debug(.outbox, "reconnect monitor started")
+    }
+
+    private func stopOutboxReconnectMonitorIfDrained() {
+        guard outbox.isEmpty, let m = outboxReconnectMonitor else { return }
+        m.stop()
+        outboxReconnectMonitor = nil
+        SalesLog.debug(.outbox, "reconnect monitor stopped — outbox drained")
+    }
+
+    // ------------------------------------------------------------------
     // MARK: - Engagement
     // ------------------------------------------------------------------
 
     /// Record a finished foreground session. The SDK's `SessionTracker`
     /// can call this for you on app lifecycle notifications.
+    ///
+    /// If the session can't be sent yet (no user, offline, server 5xx) it
+    /// is queued in the in-memory outbox and flushed automatically — the
+    /// call returns normally. Throws ONLY on permanent rejections
+    /// (validation-class 4xx).
     public func recordSession(start: Date, end: Date, durationSec: Int? = nil) async throws {
-        struct Body: Encodable {
-            let startedAt: Date; let endedAt: Date; let durationSec: Int?
-        }
-        let _: EmptyOK = try await request(
-            .recordSession, method: "POST",
-            body: Body(startedAt: start, endedAt: end, durationSec: durationSec),
-            attachUserToken: true
-        )
+        try await sendOrEnqueue([.session(start: start, end: end, durationSec: durationSec)])
     }
 
-    /// Log a single custom event. Failures are swallowed silently — events
-    /// are analytics-grade signals, not application state, so they should
-    /// never break the caller.
+    /// Log a single custom event. Never throws. Events that can't be sent
+    /// yet (no user, offline, server 5xx) are queued in the in-memory
+    /// outbox (cap 500, oldest dropped on overflow) with their ORIGINAL
+    /// `occurredAt`, and flushed automatically once sending becomes
+    /// possible. Permanent rejections are dropped with a warning.
     public func track(_ name: String, properties: [String: AnyEncodable] = [:]) async {
-        struct Body: Encodable {
-            let name: String
-            let properties: [String: AnyEncodable]
-            let occurredAt: Date
+        do {
+            try await sendOrEnqueue([.event(name: name, properties: properties, occurredAt: Date())])
+        } catch {
+            SalesLog.warn(.outbox, "event dropped — permanent rejection: \(error)")
         }
-        let body = Body(name: name, properties: properties, occurredAt: Date())
-        _ = try? await request(.recordEvent, method: "POST", body: body, attachUserToken: true) as EmptyOK
     }
 
-    /// Log multiple events at once. Useful when you've buffered events
-    /// while offline. Max 50 events per call, 16KB per event's properties.
+    /// Log multiple events at once. Same queueing behavior as `track`.
+    /// Max 50 events per server call — larger inputs are chunked by the
+    /// outbox flush.
     public func trackBatch(_ events: [(name: String, properties: [String: AnyEncodable])]) async {
-        struct EventBody: Encodable {
-            let name: String
-            let properties: [String: AnyEncodable]
-            let occurredAt: Date
+        let now = Date()
+        do {
+            try await sendOrEnqueue(events.map { .event(name: $0.name, properties: $0.properties, occurredAt: now) })
+        } catch {
+            SalesLog.warn(.outbox, "event batch dropped — permanent rejection: \(error)")
         }
-        struct Body: Encodable { let events: [EventBody] }
-        let body = Body(events: events.map { EventBody(name: $0.name, properties: $0.properties, occurredAt: Date()) })
-        _ = try? await request(.recordEvent, method: "POST", body: body, attachUserToken: true) as EmptyOK
     }
 
     // ------------------------------------------------------------------

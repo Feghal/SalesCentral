@@ -35,6 +35,7 @@ public enum SalesLog {
         case paywall   // paywall lookup + filtering
         case session   // foreground session tracker
         case observer  // background transaction observer
+        case outbox    // pre-user / offline analytics queue
     }
 
     // MARK: - API
