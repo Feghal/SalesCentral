@@ -24,9 +24,10 @@ public struct SalesConfig: Sendable {
 
     /// Integrate the SDK for everything EXCEPT transactions. When true the
     /// transaction tokens (`applyPurchases`, `currentSubscription`,
-    /// `spendCredits`, `claimReward`) are optional, the SDK never starts
-    /// the StoreKit observer / product prefetch / subscription fetch, and
-    /// transaction APIs throw `SalesError.invalidState("analytics_only")`.
+    /// `spendCredits` — and `claimReward`, which already was) are optional,
+    /// the SDK never starts the StoreKit observer / product prefetch /
+    /// subscription fetch, and transaction APIs throw
+    /// `SalesError.invalidState("analytics_only")`.
     public let analyticsOnly: Bool
 
     /// Optional override for the user-token storage backend. Defaults to
@@ -34,6 +35,11 @@ public struct SalesConfig: Sendable {
     public let tokenStore: TokenStore
 
     public init(baseURL: URL, apiKey: String, tokens: Tokens, tokenStore: TokenStore? = nil, analyticsOnly: Bool = false) {
+        if let missing = Self.missingTransactionTokens(tokens, analyticsOnly: analyticsOnly).first {
+            preconditionFailure(
+                "SalesConfig: 'tokens.\(missing)' is missing. Transaction tokens are required unless the config sets analyticsOnly — regenerate the config from the admin's SDK config card."
+            )
+        }
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.tokens = tokens
@@ -157,6 +163,21 @@ public struct SalesConfig: Sendable {
             ),
             analyticsOnly: analyticsOnly
         )
+    }
+
+    /// Transaction tokens a full-mode config is missing ([] under
+    /// analyticsOnly). Internal so tests can cover the validation matrix;
+    /// `init` turns a non-empty result into a loud precondition failure —
+    /// mirroring `need()` on the plist path — instead of an opaque 404
+    /// at purchase time against `baseURL + ""`.
+    static func missingTransactionTokens(_ tokens: Tokens, analyticsOnly: Bool) -> [String] {
+        guard !analyticsOnly else { return [] }
+        let required: [(String, String?)] = [
+            ("applyPurchases", tokens.applyPurchases),
+            ("currentSubscription", tokens.currentSubscription),
+            ("spendCredits", tokens.spendCredits),
+        ]
+        return required.filter { ($0.1 ?? "").isEmpty }.map(\.0)
     }
 
     /// Map an operation to its full URL.

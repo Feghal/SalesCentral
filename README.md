@@ -80,6 +80,20 @@ Older projects that still have a manual `Info.plist` file can paste the
 nested-dict form (admin's **Info.plist** tab) under a `SalesCentral` key
 inside Info.plist instead — the SDK checks both locations.
 
+## Analytics-only mode
+
+Integrate the SDK for everything except purchases — apps that don't sell
+through SalesCentral, or that handle payments elsewhere.
+
+Set `analyticsOnly` to `true` in `SalesCentral.plist` and omit
+`applyPurchases`, `currentSubscription`, `spendCredits`, and `claimReward`
+(generate the trimmed file with the admin's SDK config card's
+**Analytics-only** toggle). The SDK then never touches StoreKit or the
+transaction endpoints, and transaction APIs throw
+`SalesError.invalidState("analytics_only")` instead. Everything else —
+identity, sessions, events, user properties, push, remote config, and
+experiments — works unchanged.
+
 ## App Attest
 
 Every SDK call is bound to Apple App Attest: on first launch the SDK

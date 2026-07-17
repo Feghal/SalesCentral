@@ -81,23 +81,29 @@ final class AnalyticsOnlyTests: XCTestCase {
         XCTAssertEqual(config.tokens.applyPurchases, "CCCCCCCCCCCC")
     }
 
-    /// Direct `SalesConfig` construction defaults the flag off, and the
-    /// trimmed `Tokens` initializer (optional params omitted) compiles.
+    /// Direct `SalesConfig` construction defaults the flag off (full-token
+    /// config), and the trimmed `Tokens` initializer (optional params
+    /// omitted) compiles. Exercised as two separate constructions —
+    /// combining trimmed tokens with the flag left at its full-mode default
+    /// is exactly the unsafe construction this fix's init validation now
+    /// rejects with a `preconditionFailure` (see
+    /// `testMissingTransactionTokenMatrix` below for that matrix).
     func testDirectInitDefaultsAndTrimmedTokensInit() {
-        let config = SalesConfig(
-            baseURL: URL(string: "https://sales.test")!,
-            apiKey: "csk_x",
-            tokens: .init(
-                createOrFetchUser: "AAAAAAAAAAAA",
-                restoreUser:       "BBBBBBBBBBBB",
-                recordSession:     "FFFFFFFFFFFF",
-                recordEvent:       "GGGGGGGGGGGG",
-                attestChallenge:   "attc00000000",
-                attestKey:         "attk00000000"
-            )
-        )
+        let config = Self.fullConfig(tokenStore: InMemoryTokenStore())
         XCTAssertFalse(config.analyticsOnly)
-        XCTAssertNil(config.tokens.applyPurchases)
+
+        let trimmedTokens = SalesConfig.Tokens(
+            createOrFetchUser: "AAAAAAAAAAAA",
+            restoreUser:       "BBBBBBBBBBBB",
+            recordSession:     "FFFFFFFFFFFF",
+            recordEvent:       "GGGGGGGGGGGG",
+            attestChallenge:   "attc00000000",
+            attestKey:         "attk00000000"
+        )
+        XCTAssertNil(trimmedTokens.applyPurchases)
+        XCTAssertNil(trimmedTokens.currentSubscription)
+        XCTAssertNil(trimmedTokens.spendCredits)
+        XCTAssertNil(trimmedTokens.claimReward)
     }
 
     // ------------------------------------------------------------------
@@ -274,6 +280,44 @@ final class AnalyticsOnlyTests: XCTestCase {
         await expectAnalyticsOnly("reloadProducts") { _ = try await SalesCentral.reloadProducts() }
         await expectAnalyticsOnly("loadProduct")    { _ = try await SalesCentral.loadProduct("com.x.pro") }
         await expectAnalyticsOnly("purchase")       { _ = try await SalesCentral.purchase(productID: "com.x.pro") }
+    }
+
+    /// Full-mode configs must not silently lose transaction tokens: the
+    /// init validation matrix flags exactly the missing ones, and flags
+    /// nothing under analyticsOnly. (The preconditionFailure in `init`
+    /// consumes a non-empty result; crash paths aren't testable in XCTest.)
+    func testMissingTransactionTokenMatrix() {
+        let trimmed = SalesConfig.Tokens(
+            createOrFetchUser: "AAAAAAAAAAAA",
+            restoreUser:       "BBBBBBBBBBBB",
+            recordSession:     "FFFFFFFFFFFF",
+            recordEvent:       "GGGGGGGGGGGG",
+            attestChallenge:   "attc00000000",
+            attestKey:         "attk00000000"
+        )
+        XCTAssertEqual(
+            SalesConfig.missingTransactionTokens(trimmed, analyticsOnly: false),
+            ["applyPurchases", "currentSubscription", "spendCredits"]
+        )
+        XCTAssertEqual(SalesConfig.missingTransactionTokens(trimmed, analyticsOnly: true), [])
+
+        let partial = SalesConfig.Tokens(
+            createOrFetchUser: "AAAAAAAAAAAA",
+            restoreUser:       "BBBBBBBBBBBB",
+            applyPurchases:    "CCCCCCCCCCCC",
+            currentSubscription: "",
+            recordSession:     "FFFFFFFFFFFF",
+            recordEvent:       "GGGGGGGGGGGG",
+            attestChallenge:   "attc00000000",
+            attestKey:         "attk00000000"
+        )
+        XCTAssertEqual(
+            SalesConfig.missingTransactionTokens(partial, analyticsOnly: false),
+            ["currentSubscription", "spendCredits"]
+        )
+
+        let full = Self.fullConfig(tokenStore: InMemoryTokenStore())
+        XCTAssertEqual(SalesConfig.missingTransactionTokens(full.tokens, analyticsOnly: false), [])
     }
 }
 
