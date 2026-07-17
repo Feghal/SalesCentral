@@ -4,6 +4,22 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.4.0] - 2026-07-17
+
+### Added
+- **Analytics outbox.** `track` / `trackBatch` / `recordSession` calls that
+  can't be sent — no user yet (slow or offline first launch), network
+  failures, server 5xx — are now queued in an in-memory FIFO (cap 500,
+  oldest dropped) and flushed automatically once sending becomes possible:
+  after the user is established, on network reconnect, or on the next
+  analytics call. Events keep their ORIGINAL `occurredAt`, so late delivery
+  doesn't skew timelines. `recordSession` now throws only on permanent
+  (validation-class) rejections; retryable failures queue and return
+  normally. Known limitation: a response lost after the server recorded a
+  batch can duplicate those events on retry (the events endpoint has no
+  idempotency key). The queue is memory-only — items are lost if the app
+  is killed before flush — and `clearUser()` empties it.
+
 ## [1.3.0] - 2026-07-17
 
 ### Added

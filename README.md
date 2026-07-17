@@ -96,6 +96,9 @@ transaction endpoints, and transaction APIs throw
 identity, sessions, events, user properties, push, remote config, and
 experiments — works unchanged.
 
+Events and sessions fired before the user exists (or while offline) queue
+in memory (cap 500) and flush automatically with their original timestamps.
+
 ## App Attest
 
 Every SDK call is bound to Apple App Attest: on first launch the SDK
