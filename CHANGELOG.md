@@ -9,8 +9,8 @@ follow [semver](https://semver.org).
 ### Added
 - **Analytics-only mode.** Set `analyticsOnly` in `SalesCentral.plist` (or on
   `SalesConfig`) to integrate the SDK without the purchase machinery: the
-  transaction tokens (`applyPurchases`, `currentSubscription`, `spendCredits`,
-  `claimReward`) become optional, the SDK never starts the StoreKit
+  transaction tokens (`applyPurchases`, `currentSubscription`, `spendCredits`)
+  become optional (`claimReward` already was), the SDK never starts the StoreKit
   transaction observer / product prefetch / subscription fetch, and
   transaction APIs throw `SalesError.invalidState("analytics_only")`.
   Identity, sessions, events, user properties, push, context capture, and
