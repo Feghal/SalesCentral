@@ -654,6 +654,7 @@ public actor SalesClient {
         while let batch = outbox.drainNext() {
             do {
                 try await sendBatch(batch)
+                SalesLog.debug(.outbox, "flushed \(batch.items.count) item(s) — \(outbox.count) remaining")
             } catch where Self.isRetryableForOutbox(error) {
                 // Known narrow race: clearUser() during this await wipes the
                 // outbox, and this requeue can resurrect the abandoned

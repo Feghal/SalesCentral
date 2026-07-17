@@ -1,10 +1,14 @@
 import Foundation
 import Network
 
-/// Minimal reachability watcher used to recover a bootstrap that failed because
-/// the device was offline at first launch. Fires `onReconnect` exactly on the
-/// transition into a satisfied (online) path — not on every update, and not for
-/// the initial state — so the SDK can retry `start()` once the network returns.
+/// Minimal reachability watcher. Fires `onReconnect` on the transition into
+/// a satisfied (online) path — not on every update. NOTE: NWPathMonitor
+/// delivers the CURRENT path as its first update and `wasSatisfied` starts
+/// false, so a monitor started while already ONLINE fires once immediately.
+/// Both call sites accept that: the bootstrap-retry monitor starts only
+/// after an offline failure (first update is unsatisfied), and the outbox
+/// monitor treats the immediate fire as one bounded extra flush attempt
+/// per backlog episode.
 ///
 /// `@unchecked Sendable`: the only mutable state (`wasSatisfied`) is touched
 /// solely inside the serial `pathUpdateHandler`, which `NWPathMonitor` invokes

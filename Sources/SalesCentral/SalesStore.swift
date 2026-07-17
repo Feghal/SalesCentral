@@ -57,6 +57,11 @@ public final class SalesStore: ObservableObject {
     /// Call once on app launch. Ensures a user exists, refreshes their
     /// subscription state, and wires up the StoreKit + session observers.
     public func bootstrap(_ context: UserContext = .current()) async {
+        // Start the session tracker BEFORE the user round-trip: sessions
+        // produced while no user exists yet (e.g. an offline first launch)
+        // queue in the client's outbox and flush once ensureUser succeeds.
+        // Idempotent across bootstrap retries.
+        sessionTracker.start()
         do {
             user = try await client.ensureUser(context: context)
             products = await client.configuredProducts
@@ -70,7 +75,6 @@ public final class SalesStore: ObservableObject {
                 // returns to the foreground (catches renewals / refunds on resume).
                 sessionTracker.onForeground = { [weak self] in await self?.refreshSubscription() }
             }
-            sessionTracker.start()
         } catch let err as SalesError {
             lastError = err
         } catch {
