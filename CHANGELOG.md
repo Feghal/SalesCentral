@@ -4,6 +4,19 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.3.0] - 2026-07-17
+
+### Added
+- **Analytics-only mode.** Set `analyticsOnly` in `SalesCentral.plist` (or on
+  `SalesConfig`) to integrate the SDK without the purchase machinery: the
+  transaction tokens (`applyPurchases`, `currentSubscription`, `spendCredits`,
+  `claimReward`) become optional, the SDK never starts the StoreKit
+  transaction observer / product prefetch / subscription fetch, and
+  transaction APIs throw `SalesError.invalidState("analytics_only")`.
+  Identity, sessions, events, user properties, push, context capture, and
+  remote config / experiments are unaffected. Generate a trimmed config with
+  the new "Analytics-only" toggle on the admin's SDK config card.
+
 ## [1.2.0] - 2026-07-03
 
 ### Added
