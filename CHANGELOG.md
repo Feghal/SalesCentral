@@ -14,8 +14,10 @@ follow [semver](https://semver.org).
   transaction observer / product prefetch / subscription fetch, and
   transaction APIs throw `SalesError.invalidState("analytics_only")`.
   Identity, sessions, events, user properties, push, context capture, and
-  remote config / experiments are unaffected. Generate a trimmed config with
-  the new "Analytics-only" toggle on the admin's SDK config card.
+  remote config / experiments are unaffected. Generate the config with the
+  new "Analytics-only" toggle on the admin's SDK config card — it keeps
+  every token so the file also parses on pre-1.3.0 SDKs; trimming the
+  transaction tokens is optional once the app is on 1.3.0+.
 
 ## [1.2.0] - 2026-07-03
 

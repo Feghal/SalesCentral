@@ -85,10 +85,11 @@ inside Info.plist instead — the SDK checks both locations.
 Integrate the SDK for everything except purchases — apps that don't sell
 through SalesCentral, or that handle payments elsewhere.
 
-Set `analyticsOnly` to `true` in `SalesCentral.plist` and omit
-`applyPurchases`, `currentSubscription`, `spendCredits`, and `claimReward`
-(generate the trimmed file with the admin's SDK config card's
-**Analytics-only** toggle). The SDK then never touches StoreKit or the
+Set `analyticsOnly` to `true` in `SalesCentral.plist` — the admin's SDK
+config card's **Analytics-only** toggle generates this, keeping every
+token so the file also parses on SDKs before 1.3.0. On SDK 1.3.0+ you
+may additionally omit `applyPurchases`, `currentSubscription`,
+`spendCredits`, and `claimReward`. The SDK never touches StoreKit or the
 transaction endpoints, and transaction APIs throw
 `SalesError.invalidState("analytics_only")` instead. Everything else —
 identity, sessions, events, user properties, push, remote config, and
