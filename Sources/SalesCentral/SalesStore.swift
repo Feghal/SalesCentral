@@ -61,11 +61,15 @@ public final class SalesStore: ObservableObject {
             user = try await client.ensureUser(context: context)
             products = await client.configuredProducts
             retention = await client.retentionStatus
-            subscription = try? await client.currentSubscription()
-            await client.startObservingTransactions()
-            // Re-sync subscription/premium from the server whenever the app
-            // returns to the foreground (catches renewals / refunds on resume).
-            sessionTracker.onForeground = { [weak self] in await self?.refreshSubscription() }
+            if client.analyticsOnly {
+                SalesLog.info(.sdk, "bootstrap — analyticsOnly: skipping subscription fetch + transaction observer")
+            } else {
+                subscription = try? await client.currentSubscription()
+                await client.startObservingTransactions()
+                // Re-sync subscription/premium from the server whenever the app
+                // returns to the foreground (catches renewals / refunds on resume).
+                sessionTracker.onForeground = { [weak self] in await self?.refreshSubscription() }
+            }
             sessionTracker.start()
         } catch let err as SalesError {
             lastError = err

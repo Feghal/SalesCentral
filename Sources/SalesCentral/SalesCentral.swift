@@ -110,6 +110,10 @@ public enum SalesCentral {
         }
         _bootstrapped = true
         _reconnectMonitor?.stop(); _reconnectMonitor = nil
+        if shared.analyticsOnly {
+            SalesLog.info(.sdk, "start() — bootstrap complete (analyticsOnly: skipping StoreKit product prefetch)")
+            return
+        }
         SalesLog.info(.sdk, "start() — bootstrap complete; prefetching StoreKit products")
         // Right after bootstrap, the SalesClient knows which Apple SKUs the
         // admin has registered for this app (returned from createOrFetchUser).
@@ -223,6 +227,7 @@ public enum SalesCentral {
     /// (e.g. after the operator just added a new product).
     public static func loadProducts() async throws -> [Product] {
         ensureConfigured()
+        try guardTransactionsAllowed("loadProducts")
         // If start() hasn't kicked off the prefetch yet, do it on demand.
         // This makes the call usable even from app delegates that haven't
         // awaited start() yet.
@@ -251,6 +256,7 @@ public enum SalesCentral {
     @discardableResult
     public static func reloadProducts() async throws -> [Product] {
         ensureConfigured()
+        try guardTransactionsAllowed("reloadProducts")
         SalesLog.info(.store, "reloadProducts() — refetching SKUs + StoreKit lookup")
         let task = Task { try await fetchProductsFromStoreKit(forceRefreshIDs: true) }
         _productsTask = task
@@ -288,6 +294,7 @@ public enum SalesCentral {
     @discardableResult
     public static func purchase(_ product: Product) async throws -> PurchaseResult {
         ensureConfigured()
+        try guardTransactionsAllowed("purchase")
         SalesLog.info(.store, "purchase(\(product.id)) — opening StoreKit dialog")
         // Stamp the purchase with our user id as Apple's `appAccountToken`.
         // Apple echoes it on the original transaction AND every renewal, so the
@@ -456,6 +463,15 @@ public enum SalesCentral {
     private static func ensureConfigured() {
         guard _client == nil else { return }
         configure(.fromBundle())
+    }
+
+    /// Throw when a transaction API is invoked on the facade under
+    /// analyticsOnly. MainActor + nonisolated let → synchronous read.
+    private static func guardTransactionsAllowed(_ operation: String) throws {
+        if shared.analyticsOnly {
+            SalesLog.warn(.sdk, "\(operation) blocked — SDK is configured analyticsOnly")
+            throw SalesError.invalidState("analytics_only")
+        }
     }
 
     /// Ask the client for the registered SKUs, then resolve them with

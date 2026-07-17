@@ -156,6 +156,125 @@ final class AnalyticsOnlyTests: XCTestCase {
         XCTAssertTrue(observing)
         await client.stopObservingTransactions()
     }
+
+    // ------------------------------------------------------------------
+    // MARK: - Bootstrap + store behavior
+    // ------------------------------------------------------------------
+
+    /// Analytics-only bootstrap establishes the user and hits ONLY the
+    /// identity/attest endpoints — no subscription fetch, no observer.
+    @MainActor
+    func testBootstrapSkipsTransactionMachineryInAnalyticsMode() async throws {
+        RecordingURLProtocol.reset()
+        URLProtocol.registerClass(RecordingURLProtocol.self)
+        defer { URLProtocol.unregisterClass(RecordingURLProtocol.self) }
+        let conf = URLSessionConfiguration.ephemeral
+        conf.protocolClasses = [RecordingURLProtocol.self]
+        let session = URLSession(configuration: conf)
+
+        RecordingURLProtocol.next = { request in
+            let payload: [String: Any] = [
+                "ok": true, "token": "t",
+                "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "user": [
+                    "id": "u-1",
+                    "premium": ["tier": "free"],
+                    "credits": ["balance": 0],
+                    "entitlements": [:],
+                    "features": [],
+                ],
+            ]
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                try! JSONSerialization.data(withJSONObject: payload)
+            )
+        }
+
+        let tokenStore = InMemoryTokenStore()
+        tokenStore.writeAttestKeyId("mock-key-id")
+        let client = SalesClient(
+            Self.analyticsConfig(tokenStore: tokenStore),
+            urlSession: session,
+            attestService: StubAttestService()
+        )
+        let store = SalesStore(client: client)
+        await store.ensureBootstrapped()
+
+        XCTAssertNotNil(store.user, "identity bootstrap must still succeed")
+        XCTAssertNil(store.subscription, "no subscription fetch in analytics mode")
+        let observing = await client.isObservingTransactions
+        XCTAssertFalse(observing, "no StoreKit observer in analytics mode")
+
+        // Whitelist assertion: only identity + attest endpoints may be hit.
+        let allowed: Set<String> = ["AAAAAAAAAAAA", "attc00000000", "attk00000000"]
+        let hit = Set(RecordingURLProtocol.requests.compactMap { $0.url?.lastPathComponent })
+        XCTAssertTrue(hit.isSubset(of: allowed), "unexpected requests: \(hit.subtracting(allowed))")
+    }
+
+    /// `SalesStore.restorePurchases()` surfaces the guard through its
+    /// existing `lastError` channel (non-throwing method).
+    @MainActor
+    func testStoreRestorePurchasesSurfacesAnalyticsOnlyError() async {
+        let client = SalesClient(
+            Self.analyticsConfig(tokenStore: InMemoryTokenStore()),
+            attestService: StubAttestService()
+        )
+        let store = SalesStore(client: client)
+        await store.restorePurchases()
+        guard case .invalidState(let reason)? = store.lastError else {
+            return XCTFail("expected invalidState lastError, got \(String(describing: store.lastError))")
+        }
+        XCTAssertEqual(reason, "analytics_only")
+    }
+
+    /// The analytics surface itself still works: events and sessions go
+    /// out to their endpoints in analytics-only mode.
+    func testEventsAndSessionsStillFireInAnalyticsMode() async throws {
+        RecordingURLProtocol.reset()
+        URLProtocol.registerClass(RecordingURLProtocol.self)
+        defer { URLProtocol.unregisterClass(RecordingURLProtocol.self) }
+        let conf = URLSessionConfiguration.ephemeral
+        conf.protocolClasses = [RecordingURLProtocol.self]
+        let session = URLSession(configuration: conf)
+        RecordingURLProtocol.next = { request in
+            (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                Data(#"{"ok":true}"#.utf8)
+            )
+        }
+        let client = SalesClient(
+            Self.analyticsConfig(tokenStore: InMemoryTokenStore(initial: "user-token")),
+            urlSession: session,
+            attestService: StubAttestService()
+        )
+        await client.track("paywall_viewed")
+        try await client.recordSession(start: Date(timeIntervalSinceNow: -60), end: Date())
+        let hit = RecordingURLProtocol.requests.compactMap { $0.url?.lastPathComponent }
+        XCTAssertTrue(hit.contains("GGGGGGGGGGGG"), "recordEvent endpoint must be reachable; saw \(hit)")
+        XCTAssertTrue(hit.contains("FFFFFFFFFFFF"), "recordSession endpoint must be reachable; saw \(hit)")
+    }
+
+    // ------------------------------------------------------------------
+    // MARK: - SalesCentral static guards
+    // ------------------------------------------------------------------
+
+    /// The static facade throws before touching StoreKit or the network.
+    @MainActor
+    func testSalesCentralStaticsThrowAnalyticsOnly() async {
+        SalesCentral.reset()
+        defer { SalesCentral.reset() }
+        SalesCentral.configure(Self.analyticsConfig(tokenStore: InMemoryTokenStore()))
+
+        func expectAnalyticsOnly(_ op: String, _ body: () async throws -> Void) async {
+            do { try await body(); XCTFail("\(op): expected analytics_only error") }
+            catch let SalesError.invalidState(reason) { XCTAssertEqual(reason, "analytics_only", op) }
+            catch { XCTFail("\(op): unexpected error \(error)") }
+        }
+        await expectAnalyticsOnly("loadProducts")   { _ = try await SalesCentral.loadProducts() }
+        await expectAnalyticsOnly("reloadProducts") { _ = try await SalesCentral.reloadProducts() }
+        await expectAnalyticsOnly("loadProduct")    { _ = try await SalesCentral.loadProduct("com.x.pro") }
+        await expectAnalyticsOnly("purchase")       { _ = try await SalesCentral.purchase(productID: "com.x.pro") }
+    }
 }
 
 // MARK: - Shared fixtures
