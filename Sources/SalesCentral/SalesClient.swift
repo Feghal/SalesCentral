@@ -18,6 +18,11 @@ import CryptoKit
 public actor SalesClient {
 
     private let config: SalesConfig
+
+    /// True when the SDK is configured analytics-only. Nonisolated so
+    /// MainActor code (`SalesStore`, `SalesCentral`) reads it synchronously.
+    public nonisolated let analyticsOnly: Bool
+
     private let session: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -56,6 +61,18 @@ public actor SalesClient {
     private(set) public var retentionStatus: RetentionStatus?
 
     private var observer: StoreKitObserver?
+
+    /// Test hook: is the StoreKit auto-uploader running?
+    var isObservingTransactions: Bool { observer != nil }
+
+    /// First statement of every transaction API. Analytics-only integrations
+    /// must never reach the transaction endpoints or StoreKit.
+    private func guardTransactionsAllowed(_ operation: String) throws {
+        if analyticsOnly {
+            SalesLog.warn(.sdk, "\(operation) blocked — SDK is configured analyticsOnly")
+            throw SalesError.invalidState("analytics_only")
+        }
+    }
 
     /// Transaction ids already claimed for upload, so the explicit purchase()
     /// upload and the StoreKit observer don't both send the SAME transaction.
@@ -111,6 +128,7 @@ public actor SalesClient {
 
     public init(_ config: SalesConfig, urlSession: URLSession = .shared, attestService: AppAttestServicing? = nil) {
         self.config = config
+        self.analyticsOnly = config.analyticsOnly
         self.session = urlSession
         self.attestService = attestService ?? LiveAppAttestService()
 
@@ -268,6 +286,7 @@ public actor SalesClient {
         receipts: [String]? = nil,
         context: UserContext = .current()
     ) async throws -> RestoreResult {
+        try guardTransactionsAllowed("restorePurchases")
         let jws = if let receipts { receipts } else { await Self.currentEntitlementJWSStrings() }
         guard !jws.isEmpty else {
             // No prior purchases on this device — fall back to a plain
@@ -387,6 +406,7 @@ public actor SalesClient {
     /// `transactionId` — re-uploading the same JWS is safe.
     @discardableResult
     public func applyReceipts(_ jwsList: [String]) async throws -> ApplyResult {
+        try guardTransactionsAllowed("applyReceipts")
         guard !jwsList.isEmpty else {
             throw SalesError.invalidState("applyReceipts called with empty receipts")
         }
@@ -408,7 +428,8 @@ public actor SalesClient {
     /// Fetch the current subscription state. Cheap source of truth for
     /// "is this user paid right now?" — performs lazy server-side expiry.
     public func currentSubscription() async throws -> CurrentSubscriptionResponse {
-        try await request(.currentSubscription, method: "GET", body: Empty(), attachUserToken: true)
+        try guardTransactionsAllowed("currentSubscription")
+        return try await request(.currentSubscription, method: "GET", body: Empty(), attachUserToken: true)
     }
 
     // ------------------------------------------------------------------
@@ -432,6 +453,7 @@ public actor SalesClient {
     /// that reaches the server debits.
     @discardableResult
     public func spendCredits(_ amount: Int, reason: String, idempotencyKey: String? = nil) async throws -> Credits {
+        try guardTransactionsAllowed("spendCredits")
         struct Body: Encodable { let amount: Int; let reason: String; let idempotencyKey: String? }
         let credits: Credits = try await request(
             .spendCredits, method: "POST",
@@ -469,6 +491,7 @@ public actor SalesClient {
     ///   - `"rewards_disabled"`(404) — feature off for this app.
     @discardableResult
     public func claimReward() async throws -> RetentionClaimResult {
+        try guardTransactionsAllowed("claimReward")
         guard let token = config.tokens.claimReward, !token.isEmpty else {
             throw SalesError.invalidState(
                 "claimReward token not configured — regenerate SalesCentral.plist from the admin's SDK config card"
@@ -541,6 +564,10 @@ public actor SalesClient {
     /// Start watching `Transaction.updates` for new purchases / renewals
     /// and auto-upload them. Call once on app boot. Idempotent.
     public func startObservingTransactions() {
+        if analyticsOnly {
+            SalesLog.warn(.observer, "startObservingTransactions() ignored — SDK is configured analyticsOnly")
+            return
+        }
         guard observer == nil else {
             SalesLog.debug(.observer, "startObservingTransactions() — already running, no-op")
             return
