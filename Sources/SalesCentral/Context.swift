@@ -273,7 +273,10 @@ public struct ConsentContext: Encodable, Sendable {
     }
 }
 
-/// SDK constants. Updated when the package is released.
+/// SDK constants. Updated when the package is released — enforced by
+/// `VersionTests.testSDKMetadataVersionMatchesChangelogHead`, which pins
+/// this to CHANGELOG.md's newest entry (the admin renders this value as
+/// each user's "SDK" field).
 public enum SDKMetadata {
-    public static let version = "1.2.0"
+    public static let version = "1.3.1"
 }
