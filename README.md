@@ -128,6 +128,8 @@ analytics. Nothing to configure; the Simulator works against any server,
 including production. Test on a physical device to exercise real attested
 behavior.
 
+**Mac Catalyst / macOS ≤ 26 AppTransaction tier.** On macOS ≤ 26, where App Attest is likewise unavailable, the SDK can instead use a **production AppTransaction tier** if the app has enabled it in the admin's App Attest configuration. This tier proves "App Store install" (weaker than App Attest's per-device binding) and is limited to ≤5 users per proof + excluded from signup credits, but reaches money endpoints. See [INTEGRATION.md → Mac Catalyst / macOS](../docs/INTEGRATION.md#mac-catalyst--macos) for full details, constraints, and the `USER_JWT_SECRET` dependency.
+
 ## Quick start (SwiftUI)
 
 One call. That's it.
@@ -452,6 +454,10 @@ do {
 | `product_not_registered` | uploaded a receipt for a product not in the admin | add the product on the admin's Products page |
 | `production_receipt_on_sandbox_user` | a sandbox identity (Simulator) presented a Production-environment receipt — per-receipt, inside `applied[]` | use Sandbox App Store receipts on the Simulator |
 | `ownership_boundary` | the receipt belongs to an account on the other side of the sandbox/real boundary — per-receipt, inside `applied[]` | expected only when a Simulator session applies a receipt a real user owns |
+| `invalid_app_transaction` | AppTransaction JWS is malformed, expired, or fails verification | check the app's environment and Team ID match the admin config |
+| `app_transaction_bundle_mismatch` | the AppTransaction's `bundleId` does not match the app | regenerate the admin's app config with the correct bundle id |
+| `app_transaction_tier_disabled` | AppTransaction is valid but the app hasn't enabled the tier in admin | ask operator to enable `Allow AppTransaction Tier` on App Detail → App Attest |
+| `app_transaction_reuse_limit` | more than 5 users already claimed from this proof | the proof has hit the per-proof user cap; reinstall to get a new proof |
 
 `SalesError.attestUnsupported` exists for API stability but the SDK no
 longer throws it from the normal request path — a device that can't run

@@ -4,6 +4,26 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.5.0] - 2026-07-18
+
+### Added
+- **AppTransaction production tier (Mac Catalyst / macOS ≤ 26).** On macOS
+  through version 26, where `DCAppAttestService.isSupported` returns `false`,
+  the SDK can now fall back to a **per-app opt-in production tier** via StoreKit 2
+  `AppTransaction` — an Apple-signed JWS present on every App Store install.
+  This tier proves "App Store install" (weaker than App Attest's per-device
+  binding and replayable) but is strong enough for production use under the
+  following constraints: (1) per-app opt-in via `allowAppTransactionTier`
+  admin flag; (2) ≤5 users per installation proof (by `appTransactionId` or
+  `deviceVerification` id); (3) free signup credits excluded; (4) money
+  endpoints reachable; (5) tier claim integrity depends on strong
+  `USER_JWT_SECRET`. Starting macOS 27 (post-WWDC26), App Attest re-enables
+  with no code change. Added error codes `invalid_app_transaction`,
+  `app_transaction_bundle_mismatch`, `app_transaction_tier_disabled`,
+  `app_transaction_reuse_limit` to the attestation error set. See
+  [INTEGRATION.md → Mac Catalyst / macOS](../docs/INTEGRATION.md#mac-catalyst--macos)
+  for full details and security posture.
+
 ## [1.3.2] - 2026-07-18
 
 ### Added
