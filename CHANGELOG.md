@@ -4,7 +4,7 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
-## [1.5.0] - 2026-07-18
+## [1.3.3] - 2026-07-18
 
 ### Added
 - **AppTransaction production tier (Mac Catalyst / macOS ≤ 26).** On macOS
