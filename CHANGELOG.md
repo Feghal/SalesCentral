@@ -4,7 +4,7 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
-## [1.4.0] - 2026-07-18
+## [1.3.2] - 2026-07-18
 
 ### Added
 - **Registered event ("super") properties.** `SalesCentral.setEventProperties([...])`
