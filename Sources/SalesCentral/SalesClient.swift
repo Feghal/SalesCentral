@@ -74,6 +74,11 @@ public actor SalesClient {
     /// per backlog episode — NWPathMonitor cannot restart after cancel().
     private var outboxReconnectMonitor: NetworkMonitor?
 
+    /// Registered ("super") properties merged into every tracked event's
+    /// properties at track time. In-memory — re-register each launch (e.g.
+    /// from your subscription callback). Per-call properties override these.
+    private var superProperties: [String: AnyEncodable] = [:]
+
     /// Test hook: how many analytics calls are queued.
     var pendingAnalyticsCount: Int { outbox.count }
 
@@ -697,6 +702,37 @@ public actor SalesClient {
     // MARK: - Engagement
     // ------------------------------------------------------------------
 
+    // Registered event ("super") properties -----------------------------
+
+    /// Merge these into the registered set (existing keys updated, new keys
+    /// added). Attached to every subsequent tracked event.
+    public func setEventProperties(_ properties: [String: AnyEncodable]) {
+        for (k, v) in properties { superProperties[k] = v }
+    }
+
+    /// Register (or update) a single event property.
+    public func setEventProperty(_ key: String, _ value: AnyEncodable) {
+        superProperties[key] = value
+    }
+
+    /// Stop attaching `key` to future events.
+    public func removeEventProperty(_ key: String) {
+        superProperties[key] = nil
+    }
+
+    /// Drop all registered event properties.
+    public func clearEventProperties() {
+        superProperties = [:]
+    }
+
+    /// Registered super properties + per-call properties, per-call winning on
+    /// a key collision. Snapshotted at track time so the merged set rides with
+    /// the event even if it queues in the outbox and flushes later.
+    private func mergedEventProperties(_ perCall: [String: AnyEncodable]) -> [String: AnyEncodable] {
+        guard !superProperties.isEmpty else { return perCall }
+        return superProperties.merging(perCall) { _, perCallValue in perCallValue }
+    }
+
     /// Record a finished foreground session. The SDK's `SessionTracker`
     /// can call this for you on app lifecycle notifications.
     ///
@@ -715,7 +751,7 @@ public actor SalesClient {
     /// possible. Permanent rejections are dropped with a warning.
     public func track(_ name: String, properties: [String: AnyEncodable] = [:]) async {
         do {
-            try await sendOrEnqueue([.event(name: name, properties: properties, occurredAt: Date())])
+            try await sendOrEnqueue([.event(name: name, properties: mergedEventProperties(properties), occurredAt: Date())])
         } catch {
             SalesLog.warn(.outbox, "event dropped — permanent rejection: \(error)")
         }
@@ -728,7 +764,7 @@ public actor SalesClient {
     public func trackBatch(_ events: [(name: String, properties: [String: AnyEncodable])]) async {
         let now = Date()
         do {
-            try await sendOrEnqueue(events.map { .event(name: $0.name, properties: $0.properties, occurredAt: now) })
+            try await sendOrEnqueue(events.map { .event(name: $0.name, properties: mergedEventProperties($0.properties), occurredAt: now) })
         } catch {
             SalesLog.warn(.outbox, "event batch dropped — permanent rejection: \(error)")
         }

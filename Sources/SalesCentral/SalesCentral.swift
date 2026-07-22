@@ -422,6 +422,25 @@ public enum SalesCentral {
         try await shared.updateContext(UserContext(push: push))
     }
 
+    // ------------------------------------------------------------------
+    // MARK: - Registered event ("super") properties
+    // ------------------------------------------------------------------
+
+    /// Register properties merged into every subsequent tracked event.
+    /// Re-register each launch (in-memory). See `SalesClient.setEventProperties`.
+    public static func setEventProperties(_ properties: [String: AnyEncodable]) async {
+        ensureConfigured(); await shared.setEventProperties(properties)
+    }
+    public static func setEventProperty(_ key: String, _ value: AnyEncodable) async {
+        ensureConfigured(); await shared.setEventProperty(key, value)
+    }
+    public static func removeEventProperty(_ key: String) async {
+        ensureConfigured(); await shared.removeEventProperty(key)
+    }
+    public static func clearEventProperties() async {
+        ensureConfigured(); await shared.clearEventProperties()
+    }
+
     /// "production" in a release build, "sandbox" in DEBUG. The host APNs
     /// uses depends on the provisioning profile, and the two are mutually
     /// incompatible — sending a sandbox token to the production host
