@@ -32,6 +32,14 @@ final class AttestTests: XCTestCase {
         }
     }
 
+    /// Stub for `AppTransactionProviding` — returns a canned JWS (or nil,
+    /// simulating an `.xcode` environment / unavailable install proof).
+    final class StubAppTransactionProvider: AppTransactionProviding, @unchecked Sendable {
+        var jws: String?
+        init(jws: String? = nil) { self.jws = jws }
+        func installProofJWS() async -> String? { jws }
+    }
+
     /// Routes stubbed responses by URL path; records every request.
     final class StubProtocol: URLProtocol {
         static var routes: [String: (Int, String)] = [:]
@@ -71,7 +79,10 @@ final class AttestTests: XCTestCase {
     /// the fields SalesUser requires).
     static let bundleJSON = #"{"ok":true,"token":"next-token","user":{"id":"u-1","premium":{"tier":"free"},"credits":{"balance":0},"entitlements":{},"features":[],"properties":{}}}"#
 
-    private func makeClient(store: InMemoryTokenStore, mock: MockAttestService) -> SalesClient {
+    private func makeClient(
+        store: InMemoryTokenStore, mock: MockAttestService,
+        appTransactionService: AppTransactionProviding = StubAppTransactionProvider()
+    ) -> SalesClient {
         let conf = URLSessionConfiguration.ephemeral
         conf.protocolClasses = [StubProtocol.self]
         let config = SalesConfig(
@@ -87,7 +98,10 @@ final class AttestTests: XCTestCase {
             ),
             tokenStore: store
         )
-        return SalesClient(config, urlSession: URLSession(configuration: conf), attestService: mock)
+        return SalesClient(
+            config, urlSession: URLSession(configuration: conf),
+            attestService: mock, appTransactionService: appTransactionService
+        )
     }
 
     override func setUp() {
@@ -240,5 +254,82 @@ final class AttestTests: XCTestCase {
         XCTAssertEqual(paths.filter { $0 == "/c0ffee000005" }.count, 2, "exactly 2 spendCredits attempts")
         XCTAssertEqual(paths.filter { $0 == "/c0ffee000001" }.count, 1, "exactly 1 createOrFetchUser")
         XCTAssertEqual(store.read(), "next-token", "stale user token replaced by the re-minted one")
+    }
+
+    // MARK: - AppTransaction (App Store install proof) fallback tier
+
+    func testAppTransactionHeaderSentWhenUnattestedAndProofAvailable() async throws {
+        let store = InMemoryTokenStore()
+        let mock = MockAttestService()
+        mock.supported = false
+        let provider = StubAppTransactionProvider(jws: "fake-app-transaction-jws")
+        let client = makeClient(store: store, mock: mock, appTransactionService: provider)
+        _ = try await client.ensureUser()   // must NOT throw
+
+        let create = StubProtocol.seen.last!
+        XCTAssertEqual(create.headers["x-attest-unsupported"], "1", "still signals attest is unavailable")
+        XCTAssertEqual(create.headers["x-app-transaction"], "fake-app-transaction-jws", "install proof attached alongside it")
+    }
+
+    func testAppTransactionHeaderOmittedWhenProviderReturnsNil() async throws {
+        let store = InMemoryTokenStore()
+        let mock = MockAttestService()
+        mock.supported = false
+        // nil mirrors an unverified / .xcode-environment AppTransaction.
+        let provider = StubAppTransactionProvider(jws: nil)
+        let client = makeClient(store: store, mock: mock, appTransactionService: provider)
+        _ = try await client.ensureUser()
+
+        let create = StubProtocol.seen.last!
+        XCTAssertEqual(create.headers["x-attest-unsupported"], "1")
+        XCTAssertNil(create.headers["x-app-transaction"], "no install proof available — header omitted")
+    }
+
+    func testAppTransactionHeaderNotSentWhenAttestIsSupported() async throws {
+        let store = InMemoryTokenStore()
+        let mock = MockAttestService()   // supported = true (default)
+        let provider = StubAppTransactionProvider(jws: "fake-app-transaction-jws")
+        let client = makeClient(store: store, mock: mock, appTransactionService: provider)
+        _ = try await client.ensureUser()
+
+        let create = StubProtocol.seen.last!
+        XCTAssertNil(create.headers["x-attest-unsupported"], "device can attest — no fallback signal")
+        XCTAssertNil(create.headers["x-app-transaction"], "attest path taken — install proof fallback never consulted")
+        XCTAssertNotNil(create.headers["x-attest-key-id"], "real attest headers attached instead")
+    }
+
+    func testAppTransactionHeaderOmittedOnceUserTokenExists() async throws {
+        // Once a session already has a user token, createOrFetchUser is no
+        // longer a "tokenless bootstrap" — the install-proof fallback must
+        // not attach (mirrors how a reuse-limit reject must never be able
+        // to touch a live session).
+        let store = InMemoryTokenStore(initial: "existing-user-token")
+        let mock = MockAttestService()
+        mock.supported = false
+        let provider = StubAppTransactionProvider(jws: "fake-app-transaction-jws")
+        let client = makeClient(store: store, mock: mock, appTransactionService: provider)
+        _ = try await client.ensureUser()
+
+        let create = StubProtocol.seen.last!
+        XCTAssertEqual(create.headers["x-attest-unsupported"], "1")
+        XCTAssertEqual(create.headers["x-user-token"], "existing-user-token")
+        XCTAssertNil(create.headers["x-app-transaction"], "not a tokenless bootstrap — fallback omitted")
+    }
+
+    func testAppTransactionErrorCodesDoNotWipeUserSession() async throws {
+        let store = InMemoryTokenStore(initial: "user-jwt")
+        let mock = MockAttestService()
+        let client = makeClient(store: store, mock: mock)
+        StubProtocol.routes["/c0ffee000001"] = (401, #"{"ok":false,"error":"app_transaction_reuse_limit"}"#)
+
+        do {
+            _ = try await client.ensureUser()
+            XCTFail("expected the reuse-limit rejection to surface")
+        } catch let e as SalesError {
+            XCTAssertEqual(e.code, "app_transaction_reuse_limit")
+        } catch {
+            XCTFail("wrong error type: \(error)")
+        }
+        XCTAssertEqual(store.read(), "user-jwt", "an app_transaction reject must not wipe the user session")
     }
 }

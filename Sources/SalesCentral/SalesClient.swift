@@ -27,6 +27,7 @@ public actor SalesClient {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let attestService: AppAttestServicing
+    private let appTransactionService: AppTransactionProviding
 
     private(set) public var currentUser: SalesUser?
 
@@ -143,11 +144,16 @@ public actor SalesClient {
         }
     }
 
-    public init(_ config: SalesConfig, urlSession: URLSession = .shared, attestService: AppAttestServicing? = nil) {
+    public init(
+        _ config: SalesConfig, urlSession: URLSession = .shared,
+        attestService: AppAttestServicing? = nil,
+        appTransactionService: AppTransactionProviding? = nil
+    ) {
         self.config = config
         self.analyticsOnly = config.analyticsOnly
         self.session = urlSession
         self.attestService = attestService ?? LiveAppAttestService()
+        self.appTransactionService = appTransactionService ?? LiveAppTransactionService()
 
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
@@ -838,6 +844,11 @@ public actor SalesClient {
     private static let attestErrorCodes: Set<String> = [
         "attestation_required", "unknown_attest_key", "invalid_challenge",
         "invalid_assertion", "assertion_replay", "attest_config_missing",
+        // App Store install-proof (AppTransaction) fallback tier rejects —
+        // these mean "your install proof was bad", not "your user token is
+        // bad", so they must not wipe the stored user session either.
+        "invalid_app_transaction", "app_transaction_bundle_mismatch",
+        "app_transaction_tier_disabled", "app_transaction_reuse_limit",
     ]
 
     private struct ChallengeResponse: Decodable { let ok: Bool?; let challenge: String }
@@ -851,6 +862,10 @@ public actor SalesClient {
     /// One-time flag so the unattested warning logs once per process, not
     /// once per call.
     private var warnedUnattested = false
+
+    /// One-time flag so the app_transaction fallback-tier notice logs once
+    /// per process, not once per call. Mirrors `warnedUnattested`.
+    private var warnedAppTransactionTier = false
 
     private func fetchAttestChallenge() async throws -> String {
         let resp: ChallengeResponse = try await request(.attestChallenge, method: "POST", body: Empty(), attachUserToken: false)
@@ -938,8 +953,10 @@ public actor SalesClient {
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue(config.apiKey, forHTTPHeaderField: "x-app-key")
+        var hasUserToken = false
         if attachUserToken, let token = config.tokenStore.read() {
             req.setValue(token, forHTTPHeaderField: "x-user-token")
+            hasUserToken = true
         }
         var bodyData: Data? = nil
         if let body = body, !(body is Empty) {
@@ -959,6 +976,21 @@ public actor SalesClient {
                 if !warnedUnattested {
                     warnedUnattested = true
                     SalesLog.warn(.sdk, "App Attest unavailable — running UNATTESTED. This identity is SANDBOX (excluded from production data). Use a physical device for production behavior.")
+                }
+                // App Store install-proof fallback: only on the tokenless
+                // bootstrap createOrFetchUser path. A reject here (bad/
+                // mismatched/disabled/reuse-capped proof) must never be
+                // able to touch an existing user session, so this is
+                // scoped to the exact same first-launch, no-x-user-token
+                // request that mints one — never a call that already
+                // carries a live session's token.
+                if endpoint == .createOrFetchUser, !hasUserToken,
+                   let jws = await appTransactionService.installProofJWS() {
+                    req.setValue(jws, forHTTPHeaderField: "x-app-transaction")
+                    if !warnedAppTransactionTier {
+                        warnedAppTransactionTier = true
+                        SalesLog.warn(.sdk, "App Attest unavailable — presenting App Store install proof (AppTransaction) as a production 'app_transaction' identity fallback.")
+                    }
                 }
             }
         }
