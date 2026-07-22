@@ -456,7 +456,7 @@ do {
 | `ownership_boundary` | the receipt belongs to an account on the other side of the sandbox/real boundary — per-receipt, inside `applied[]` | expected only when a Simulator session applies a receipt a real user owns |
 | `invalid_app_transaction` | AppTransaction JWS is malformed, expired, or fails verification | check the app's environment and Team ID match the admin config |
 | `app_transaction_bundle_mismatch` | the AppTransaction's `bundleId` does not match the app | regenerate the admin's app config with the correct bundle id |
-| `app_transaction_tier_disabled` | AppTransaction is valid but the app hasn't enabled the tier in admin | ask operator to enable `Allow AppTransaction Tier` on App Detail → App Attest |
+| `app_transaction_tier_disabled` | **Reserved — not currently emitted by the server.** Flag-off is a silent fallback to sandbox admission, not an error | not applicable today; the SDK still recognizes the code defensively (`attestErrorCodes`) |
 | `app_transaction_reuse_limit` | more than 5 users already claimed from this proof | the proof has hit the per-proof user cap; reinstall to get a new proof |
 
 `SalesError.attestUnsupported` exists for API stability but the SDK no
