@@ -4,6 +4,18 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.4.0] - 2026-07-18
+
+### Added
+- **Registered event ("super") properties.** `SalesCentral.setEventProperties([...])`
+  (and `setEventProperty` / `removeEventProperty` / `clearEventProperties`)
+  registers properties that the SDK merges into every subsequent `track` /
+  `trackBatch` event, so you can segment events by a persistent trait without
+  passing it at each call site. Per-call properties override a registered key.
+  In-memory (re-register each launch). Typical use: an analytics-only app that
+  handles subscriptions elsewhere registers `["plan": "premium"|"free"]` from
+  its subscription callback, then segments event analytics by `properties.plan`.
+
 ## [1.3.1] - 2026-07-18
 
 ### Added

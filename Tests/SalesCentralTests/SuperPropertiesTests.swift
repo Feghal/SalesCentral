@@ -109,6 +109,7 @@ final class SuperPropertiesTests: XCTestCase {
 
         await client.setEventProperties(["plan": .init("premium")])
         await client.track("queued_evt")             // no token → queued, no HTTP yet
+        await client.clearEventProperties()   // prove the value was snapshotted at track time, not recomputed at flush
 
         SPRecordingURLProtocol.next = { request in
             // createOrFetchUser is an asserted endpoint: it first triggers a
