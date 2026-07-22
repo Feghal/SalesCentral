@@ -278,5 +278,5 @@ public struct ConsentContext: Encodable, Sendable {
 /// this to CHANGELOG.md's newest entry (the admin renders this value as
 /// each user's "SDK" field).
 public enum SDKMetadata {
-    public static let version = "1.3.2"
+    public static let version = "1.5.0"
 }
