@@ -128,16 +128,64 @@ public actor SalesClient {
         }
     }
 
-    /// Upload one observer-delivered transaction: claim → upload → unclaim on
-    /// failure. Returns true when the upload succeeded and the caller should
-    /// finish() the transaction. On failure the claim is released so the next
-    /// StoreKit redelivery (same session or next launch) retries the upload —
-    /// the server is idempotent on transactionId, so a retry can't double-apply.
+    /// Per-receipt server rejections that will NEVER succeed on a retry, no
+    /// matter how many times StoreKit redelivers the same transaction. These
+    /// are properties of the transaction itself (already lapsed, refunded,
+    /// structurally unusable), so leaving it unfinished only makes StoreKit
+    /// replay a dead transaction forever — and `product.purchase()` hands that
+    /// replay back instead of opening a purchase sheet, which is how a single
+    /// stale sandbox transaction can wedge every future purchase attempt.
+    ///
+    /// Deliberately NOT terminal (leave unfinished so Apple keeps retrying):
+    ///   * `product_not_registered` — the operator can register the SKU later;
+    ///     finishing would silently eat a paid consumable that no restore can
+    ///     recover (consumables never appear in `currentEntitlements`).
+    ///   * `ownership_boundary` / `production_receipt_on_sandbox_user` — these
+    ///     are about WHICH identity uploaded, not the transaction. A later
+    ///     launch on the right identity applies it.
+    ///   * `verification_failed` — can be a server-side cert/clock problem.
+    nonisolated static let terminalReceiptErrors: Set<String> = [
+        "expired_transaction",
+        "revoked_transaction",
+        "invalid_transaction",
+        "invalid_receipt",
+    ]
+
+    /// Should the caller `finish()` the transaction, given the server's
+    /// per-receipt result? True when the receipt was applied, or when it was
+    /// rejected for a reason that can never change (see
+    /// `terminalReceiptErrors`). A `nil` result means the server said nothing
+    /// per-receipt — treat as handled rather than replaying forever.
+    nonisolated static func shouldFinish(after applied: AppliedReceipt?) -> Bool {
+        guard let applied else { return true }
+        if applied.ok { return true }
+        return terminalReceiptErrors.contains(applied.error ?? "")
+    }
+
+    /// Upload one observer-delivered transaction: claim → upload → unclaim
+    /// when it should be retried. Returns true when the caller should finish()
+    /// the transaction — either the server applied it, or it rejected it
+    /// permanently. On a retryable outcome (network failure, or a rejection
+    /// that a later launch could satisfy) the claim is released so the next
+    /// StoreKit redelivery retries the upload — the server is idempotent on
+    /// transactionId, so a retry can't double-apply.
     func uploadObservedTransaction(id: String, jws: String) async -> Bool {
         guard claimTransaction(id) else { return false }
         do {
-            _ = try await applyReceipts([jws])
-            return true
+            let resp = try await applyReceipts([jws])
+            let first = resp.applied.first
+            if Self.shouldFinish(after: first) {
+                if let first, !first.ok {
+                    SalesLog.warn(.observer, "txn \(id) permanently rejected (\(first.error ?? "unknown")) — finishing so StoreKit stops replaying it")
+                }
+                return true
+            }
+            // Rejected for a reason a later attempt could satisfy (unregistered
+            // SKU, wrong identity). Leave it unfinished — Apple's redelivery IS
+            // the retry — and release the claim so that redelivery isn't skipped.
+            SalesLog.warn(.observer, "txn \(id) not applied (\(first?.error ?? "unknown")) — leaving unfinished for retry")
+            unclaimTransaction(id)
+            return false
         } catch {
             unclaimTransaction(id)
             return false

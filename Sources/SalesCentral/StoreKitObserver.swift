@@ -21,6 +21,16 @@ final class StoreKitObserver: @unchecked Sendable {
         guard task == nil else { return }
         #if canImport(StoreKit)
         task = Task.detached(priority: .background) { [weak self] in
+            // Drain first. `Transaction.updates` only carries NEW updates — it
+            // does not replay a transaction this app left unfinished in an
+            // earlier process (an upload that failed mid-flight, or a crash
+            // between upload and finish()). Without this pass nothing ever
+            // retries those, and StoreKit keeps handing the stale transaction
+            // back to `product.purchase()` instead of opening a purchase
+            // sheet — so every later purchase attempt replays a transaction
+            // that, once its (minutes-long, in sandbox) window closes, the
+            // server can only reject as `expired_transaction`.
+            await self?.drainUnfinished()
             for await update in StoreKit.Transaction.updates {
                 guard case .verified(let txn) = update, let client = self?.client else { continue }
                 // uploadObservedTransaction claims the txn (so an explicit
@@ -41,4 +51,28 @@ final class StoreKitObserver: @unchecked Sendable {
         task?.cancel()
         task = nil
     }
+
+    #if canImport(StoreKit)
+    /// Upload every transaction StoreKit still considers unfinished, then
+    /// finish the ones the server settled (applied, or rejected permanently).
+    /// Finite sequence — unlike `Transaction.updates` it completes once the
+    /// backlog is emitted, so this returns and the caller falls through to the
+    /// live stream.
+    private func drainUnfinished() async {
+        guard let client else { return }
+        var drained = 0
+        var finished = 0
+        for await result in StoreKit.Transaction.unfinished {
+            guard case .verified(let txn) = result else { continue }
+            drained += 1
+            if await client.uploadObservedTransaction(id: String(txn.id), jws: result.jwsRepresentation) {
+                await txn.finish()
+                finished += 1
+            }
+        }
+        if drained > 0 {
+            SalesLog.info(.observer, "drained \(drained) unfinished transaction(s) — \(finished) settled, \(drained - finished) left for retry")
+        }
+    }
+    #endif
 }

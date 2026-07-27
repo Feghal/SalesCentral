@@ -4,6 +4,31 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.3.4] - 2026-07-27
+
+### Fixed
+- **Unfinished transactions are now drained at startup.** `Transaction.updates`
+  only carries NEW updates — it never replays a transaction the app left
+  unfinished in an earlier process (an upload that failed mid-flight, or a
+  crash between upload and `finish()`). Nothing retried those, and StoreKit
+  kept handing the stale transaction back to `product.purchase()` instead of
+  opening a purchase sheet. Once its window closed — minutes, in the sandbox,
+  where a monthly subscription lasts 5 — every later purchase attempt was
+  rejected as `expired_transaction`, while `restorePurchases()` still worked
+  (it uploads `currentEntitlements`, which only contains LIVE entitlements).
+  `startObservingTransactions()` now drains `Transaction.unfinished` before
+  subscribing to the live stream.
+- **Transaction finishing now follows the server's verdict.** Previously any
+  HTTP 200 finished the transaction, including rejections a later attempt
+  could satisfy — an unregistered SKU silently ate a paid consumable that no
+  restore can recover. Both the observer and `purchase()` now finish only when
+  the receipt was applied or rejected permanently
+  (`expired_transaction`, `revoked_transaction`, `invalid_transaction`,
+  `invalid_receipt`). `product_not_registered`, `ownership_boundary`,
+  `production_receipt_on_sandbox_user` and `verification_failed` stay
+  unfinished so Apple's redelivery retries them. See
+  `SalesClient.terminalReceiptErrors`.
+
 ## [1.3.3] - 2026-07-18
 
 ### Added

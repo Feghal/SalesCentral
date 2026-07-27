@@ -330,7 +330,18 @@ public enum SalesCentral {
                     await shared.unclaimTransaction(String(txn.id))
                     throw error
                 }
-                await txn.finish()
+                // Finish only what the server settled. An applied receipt is
+                // done; so is one rejected for a reason that can never change
+                // (expired / revoked) — finishing those is what stops StoreKit
+                // replaying a dead transaction into the next purchase() call.
+                // A rejection a later attempt could satisfy (unregistered SKU,
+                // wrong identity) stays UNFINISHED so Apple redelivers it, and
+                // the claim is released so the observer's drain picks it up.
+                if SalesClient.shouldFinish(after: resp.applied.first) {
+                    await txn.finish()
+                } else {
+                    await shared.unclaimTransaction(String(txn.id))
+                }
                 await store.syncAfterPurchase(user: resp.user)
                 // StoreKit can hand back an already-owned / expired entitlement
                 // with no purchase sheet; the backend rejects receipts it can't
