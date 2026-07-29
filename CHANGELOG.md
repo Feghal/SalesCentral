@@ -4,6 +4,24 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.3.5] - 2026-07-29
+
+### Changed
+- **The purchase log distinguishes applied from already-processed receipts.**
+  `applied N receipt(s)` counted receipts the server accepted, not effects it
+  granted — an `alreadyProcessed` result is a successful receipt that granted
+  nothing on that call. Reading the count as an effect count made a purchase
+  that left the account on the free tier look like a clean success. The line
+  now reads `N receipt(s) applied, M already processed`.
+
+### Server
+- Purchases now answer `transaction_owner_mismatch` when the transaction is
+  already recorded against a different SalesCentral account, instead of
+  reporting success while granting nothing. `purchase()` surfaces it as
+  `.notEntitled(reason:)`, and — like `ownership_boundary` — it is NOT terminal,
+  so the transaction stays unfinished for StoreKit to redeliver once the
+  ownership record is repaired.
+
 ## [1.3.4] - 2026-07-27
 
 ### Fixed

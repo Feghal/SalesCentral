@@ -351,7 +351,13 @@ public enum SalesCentral {
                     SalesLog.warn(.store, "purchase(\(product.id)) — receipt not applied: \(first.error ?? "unknown")")
                     return .notEntitled(reason: first.error ?? "not_entitled")
                 }
-                SalesLog.info(.store, "purchase(\(product.id)) — applied \(resp.applied.count) receipt(s)")
+                // Receipt count is not effect count: a receipt the server had
+                // already processed comes back ok=true with alreadyProcessed,
+                // having granted nothing on this call. Spell the difference out
+                // so an entitlement question isn't read as "we granted it".
+                let deduped = resp.applied.filter { $0.alreadyProcessed == true }.count
+                let fresh = resp.applied.count - deduped
+                SalesLog.info(.store, "purchase(\(product.id)) — \(fresh) receipt(s) applied, \(deduped) already processed")
                 return .success(applied: resp.applied)
             case .unverified(_, let error):
                 SalesLog.warn(.store, "purchase(\(product.id)) — UNVERIFIED: \(error.localizedDescription)")
