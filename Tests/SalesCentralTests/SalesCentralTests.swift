@@ -81,6 +81,27 @@ final class SalesCentralTests: XCTestCase {
         XCTAssertNotNil(ctx.locale)
     }
 
+    /// The storefront must survive encoding — it is the field the backend uses
+    /// to pick which territory's price list a payment came from. Without it an
+    /// Armenian $11.99 (the $9.99 tier plus 20% VAT) is indistinguishable from
+    /// a genuine US $11.99 and the tax gets booked as revenue.
+    func testAppContextEncodesStorefront() throws {
+        let ctx = UserContext(app: AppContext(version: "1.0", storefront: "ARM"))
+        let data = try JSONEncoder().encode(ctx)
+        let json = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(json.contains("\"storefront\":\"ARM\""), "storefront missing from payload: \(json)")
+    }
+
+    /// Absent is absent — never an empty string or a guessed value. The backend
+    /// reports transactions with no storefront as unconverted rather than
+    /// inferring one, and that only works if we genuinely omit it.
+    func testAppContextOmitsStorefrontWhenUnknown() throws {
+        let ctx = UserContext(app: AppContext(version: "1.0"))
+        let data = try JSONEncoder().encode(ctx)
+        let json = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(json.contains("storefront"), "storefront should be absent, not empty: \(json)")
+    }
+
     func testContextMergePrefersOther() {
         var a = UserContext(locale: LocaleContext(language: "en"))
         let b = UserContext(locale: LocaleContext(language: "ja"))

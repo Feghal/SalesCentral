@@ -1,4 +1,5 @@
 import Foundation
+import StoreKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -194,8 +195,51 @@ public struct AppContext: Encodable, Sendable {
         return AppContext(
             version: info["CFBundleShortVersionString"] as? String,
             build:   info["CFBundleVersion"] as? String,
-            sdkVersion: sdkVersion
+            sdkVersion: sdkVersion,
+            storefront: StorefrontBox.shared.current
         )
+    }
+
+    /// Refresh the cached App Store storefront. Called by `SalesCentral.start()`.
+    ///
+    /// The storefront is the country whose price list the user actually buys
+    /// from, and it is NOT derivable from anything else we send. Locale and IP
+    /// country are both routinely different from it — someone can hold a US
+    /// Apple ID while living in Armenia — and Apple's own documentation says to
+    /// use the storefront rather than infer it from the currency.
+    ///
+    /// It matters for revenue: territories that share a currency do not share a
+    /// price list. Armenia bills in USD but charges the $9.99 tier at $11.99,
+    /// the difference being 20% VAT. Without the storefront the backend cannot
+    /// tell that apart from a genuine US $11.99 sale, and books the tax as
+    /// revenue.
+    ///
+    /// `countryCode` is an ISO 3166-1 alpha-3 code ("USA", "ARM"), which is
+    /// exactly the form Apple's price-point data uses.
+    public static func refreshStorefront() async {
+        StorefrontBox.shared.set(await Storefront.current?.countryCode)
+    }
+}
+
+/// Holds the storefront so `AppContext.current()` can stay synchronous.
+///
+/// StoreKit 2 exposes `Storefront.current` as an async property, but
+/// `AppContext.current()` and `UserContext.current()` are synchronous public
+/// APIs that consumers already call. Making them async would be a source-break
+/// for every caller, so the value is fetched asynchronously and read
+/// synchronously here. Nil until the first refresh, which is the honest
+/// answer — the backend treats a missing storefront as "unknown" and reports
+/// those transactions as unconverted rather than guessing.
+private final class StorefrontBox: @unchecked Sendable {
+    static let shared = StorefrontBox()
+    private let lock = NSLock()
+    private var value: String?
+    var current: String? {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+    func set(_ newValue: String?) {
+        lock.lock(); value = newValue; lock.unlock()
     }
 }
 

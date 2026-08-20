@@ -96,6 +96,11 @@ public enum SalesCentral {
             return
         }
         SalesLog.info(.sdk, "start() — bootstrapping…")
+        // Fetch the storefront before bootstrap so the very first context we
+        // send already carries it. Without it the backend cannot tell an
+        // Armenian $11.99 (the $9.99 tier plus 20% VAT) from a US $11.99, and
+        // books the tax as revenue.
+        await AppContext.refreshStorefront()
         // Single-flight: concurrent start()/loadProducts triggers share ONE
         // attempt (no duplicate user creation), and a failed attempt leaves the
         // store un-bootstrapped so we can retry.
