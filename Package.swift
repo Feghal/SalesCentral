@@ -27,7 +27,11 @@ let package = Package(
         .testTarget(
             name: "SalesCentralTests",
             dependencies: ["SalesCentral"],
-            path: "Tests/SalesCentralTests"
+            path: "Tests/SalesCentralTests",
+            // StoreKit Testing configuration for StoreKitRestoreFlowTests —
+            // lets the suite buy and expire real StoreKit transactions
+            // without an App Store sandbox account.
+            resources: [.copy("SalesCentralTest.storekit")]
         ),
     ]
 )

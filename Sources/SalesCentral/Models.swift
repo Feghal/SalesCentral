@@ -270,6 +270,14 @@ public struct AppliedReceipt: Decodable, Sendable, Equatable {
     public let alreadyProcessed: Bool?
     public let effects: [AnyDecodable]?
     public let error: String?
+    /// Set when the server deliberately applied nothing — currently only
+    /// `consumable_not_restorable`, on the restore path. Not a failure: `ok`
+    /// stays true. Consumables are not restorable purchases, so restore uses
+    /// the receipt to identify the owning account and grants nothing; an
+    /// undelivered consumable is recovered by leaving its StoreKit
+    /// transaction unfinished for redelivery to `POST /purchases`. `nil` on
+    /// servers that predate this.
+    public let skipped: String?
 }
 
 /// Response shape for `POST /purchases`.

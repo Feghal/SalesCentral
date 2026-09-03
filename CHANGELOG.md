@@ -4,6 +4,54 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.3.7] - 2026-09-02
+
+### Fixed
+- **Restore now recovers the account of a user who is NOT premium.** Reported
+  as "after restore purchase, credits are not restored if the user is not
+  premium." `restorePurchases()` sourced its receipts from
+  `Transaction.currentEntitlements`, which holds only purchases that
+  *currently* entitle the user — so it is empty for a lapsed subscriber and
+  never lists consumables at all (1.3.4 noted this limitation in passing; it
+  is the whole bug here). With an empty list the SDK short-circuited and never
+  called `/users/restore`, falling back to `ensureUser()`. On a device that had
+  also lost its keychain identity — a new device or an App Store Connect app
+  transfer, which is precisely when someone taps "Restore Purchases" —
+  `ensureUser()` mints a BRAND-NEW account with a zero balance, stranding the
+  paid credits on the old one. Restore now reads the device's full purchase
+  history (`Transaction.all`) through the new `ReceiptProviding` seam, so the
+  server gets the receipts it needs to resolve the owning account.
+
+  Receipts are IDENTITY here, not payment: the server resolves the account that
+  owns each purchase and returns it. It does not re-apply purchases the account
+  already holds — `processPurchase` is idempotent on `(appId, transactionId)` —
+  so the wider receipt list cannot grant credits. Pinned server-side by
+  `tests/restoreNonPremiumCredits.integration.test.js`, which asserts that a
+  repeated restore neither re-grants a pack nor refills a spent balance.
+
+### Server
+- **Restore no longer applies a consumable's effects.** Apple does not restore
+  consumables, and this SDK never relied on restore to recover one — an
+  undelivered consumable is protected by leaving its StoreKit transaction
+  unfinished so Apple redelivers it to `POST /purchases`. `POST /users/restore`
+  now uses a consumable receipt for identification only, skipping it whole (no
+  effects, no Transaction row) and reporting `skipped:
+  "consumable_not_restorable"` with `ok: true`. Without this, uploading the
+  full transaction history (above) would retroactively credit any pack the
+  server never recorded, double-paying users whose purchase history predates
+  the backend. Owner resolution is unaffected: it runs before ingest, off the
+  receipt's `appAccountToken` / `originalTransactionId`. The `POST /purchases`
+  path is unchanged and still grants consumables normally.
+
+### Added
+- `AppliedReceipt.skipped` — why the server deliberately applied nothing.
+- `ReceiptProviding` — injectable source for the receipts `restorePurchases()`
+  uploads, alongside the existing `AppAttestServicing` /
+  `AppTransactionProviding` seams. Defaults to `LiveReceiptProvider`
+  (`Transaction.all`); pass one to `SalesClient.init` to stub it in tests.
+  `SalesClient.currentEntitlementJWSStrings()` is unchanged and still public,
+  but is no longer what restore uses.
+
 ## [1.3.5] - 2026-07-29
 
 ### Changed

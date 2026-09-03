@@ -28,6 +28,7 @@ public actor SalesClient {
     private let decoder: JSONDecoder
     private let attestService: AppAttestServicing
     private let appTransactionService: AppTransactionProviding
+    private let receiptProvider: ReceiptProviding
 
     private(set) public var currentUser: SalesUser?
 
@@ -195,13 +196,15 @@ public actor SalesClient {
     public init(
         _ config: SalesConfig, urlSession: URLSession = .shared,
         attestService: AppAttestServicing? = nil,
-        appTransactionService: AppTransactionProviding? = nil
+        appTransactionService: AppTransactionProviding? = nil,
+        receiptProvider: ReceiptProviding? = nil
     ) {
         self.config = config
         self.analyticsOnly = config.analyticsOnly
         self.session = urlSession
         self.attestService = attestService ?? LiveAppAttestService()
         self.appTransactionService = appTransactionService ?? LiveAppTransactionService()
+        self.receiptProvider = receiptProvider ?? LiveReceiptProvider()
 
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
@@ -354,14 +357,22 @@ public actor SalesClient {
     }
 
     /// Recover the user that owns the given Apple receipt(s). Pulls the
-    /// current StoreKit entitlements automatically when `receipts` is omitted.
+    /// device's full StoreKit purchase history automatically when `receipts`
+    /// is omitted — NOT just its current entitlements, which are empty for a
+    /// lapsed subscriber and never include consumables, so restore used to
+    /// silently mint a new empty account for exactly those users.
+    ///
+    /// Receipts are IDENTITY here, not payment: the server resolves the
+    /// account that owns each purchase and returns it. It does not re-apply
+    /// purchases the account already has (`processPurchase` is idempotent on
+    /// `(appId, transactionId)`), so a wider history cannot grant credits.
     @discardableResult
     public func restorePurchases(
         receipts: [String]? = nil,
         context: UserContext = .current()
     ) async throws -> RestoreResult {
         try guardTransactionsAllowed("restorePurchases")
-        let jws = if let receipts { receipts } else { await Self.currentEntitlementJWSStrings() }
+        let jws = if let receipts { receipts } else { await receiptProvider.restoreReceiptJWS() }
         guard !jws.isEmpty else {
             // No prior purchases on this device — fall back to a plain
             // create-or-fetch so the caller always ends up with a usable
@@ -1118,6 +1129,13 @@ public actor SalesClient {
     /// Pull every verified `Transaction` currently entitled to the user and
     /// return their raw JWS strings. The SDK never parses receipts — these
     /// strings go straight to the server.
+    ///
+    /// NOT the source `restorePurchases()` uses. Current entitlements exclude
+    /// lapsed subscriptions and never list consumables, so this is empty for
+    /// exactly the users who most need to recover an account. Restore reads
+    /// the full history via `ReceiptProviding` instead — see
+    /// `LiveReceiptProvider`. Kept for callers that genuinely want "what is
+    /// this user entitled to right now".
     public static func currentEntitlementJWSStrings() async -> [String] {
         #if canImport(StoreKit)
         var out: [String] = []
