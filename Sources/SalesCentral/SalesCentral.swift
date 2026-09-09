@@ -115,6 +115,12 @@ public enum SalesCentral {
         }
         _bootstrapped = true
         _reconnectMonitor?.stop(); _reconnectMonitor = nil
+        // Apple Search Ads attribution. Deliberately NOT awaited: Apple 404s
+        // for the first few seconds after an install, so resolving can spend
+        // ~10s retrying, and nothing about first paint or the product prefetch
+        // should wait on an analytics field. Runs for analytics-only apps too
+        // — knowing which campaign produced a user is not a purchase concern.
+        Task { await resolveAppleSearchAdsAttribution() }
         if shared.analyticsOnly {
             SalesLog.info(.sdk, "start() — bootstrap complete (analyticsOnly: skipping StoreKit product prefetch)")
             return
@@ -127,6 +133,38 @@ public enum SalesCentral {
         // blocked by the StoreKit network call.
         if _productsTask == nil {
             _productsTask = Task { try await fetchProductsFromStoreKit() }
+        }
+    }
+
+    /// Set once Apple has given a DEFINITIVE answer about this install, so
+    /// the lookup runs about once per install rather than once per launch.
+    static let adServicesResolvedKey = "com.salescentral.adservices.resolved"
+
+    /// Resolve Apple Search Ads attribution and merge it onto the user.
+    ///
+    /// The flag is set only on a definitive outcome: Apple attributed the
+    /// install AND the merge reached the backend, or Apple stated it was not a
+    /// Search Ads install. Every other case — offline, token not ready yet,
+    /// Apple unreachable — leaves it unset so the next launch tries again.
+    /// Re-sending costs nothing: acquisition fields are write-once on the
+    /// server, so a duplicate merge is ignored rather than re-attributing.
+    static func resolveAppleSearchAdsAttribution(defaults: UserDefaults = .standard) async {
+        guard !defaults.bool(forKey: adServicesResolvedKey) else { return }
+
+        switch await AdServicesAttribution.resolve() {
+        case .attributed(let marketing):
+            do {
+                _ = try await shared.updateContext(UserContext(marketing: marketing))
+                defaults.set(true, forKey: adServicesResolvedKey)
+            } catch {
+                // Attributed but not delivered — do NOT mark resolved, or the
+                // campaign is lost for the life of the install.
+                SalesLog.warn(.attribution, "attribution resolved but not sent: \(error.localizedDescription) — retrying next launch")
+            }
+        case .notAppleSearchAds:
+            defaults.set(true, forKey: adServicesResolvedKey)
+        case .unavailable:
+            break
         }
     }
 
@@ -170,6 +208,10 @@ public enum SalesCentral {
         _client = nil
         _store = nil
         _bootstrapped = false
+        // Also clear the once-per-install attribution flag, so a reset in a
+        // test (or a deliberate re-bootstrap) exercises the lookup again
+        // instead of silently skipping it.
+        UserDefaults.standard.removeObject(forKey: adServicesResolvedKey)
     }
 
     // ------------------------------------------------------------------

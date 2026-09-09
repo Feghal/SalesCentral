@@ -36,6 +36,7 @@ public enum SalesLog {
         case session   // foreground session tracker
         case observer  // background transaction observer
         case outbox    // pre-user / offline analytics queue
+        case attribution // Apple Search Ads / AdServices lookup
     }
 
     // MARK: - API

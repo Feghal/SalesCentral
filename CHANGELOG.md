@@ -4,6 +4,29 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.3.8] - 2026-09-09
+
+### Added
+- **Apple Search Ads attribution, resolved automatically at bootstrap.**
+  `start()` now asks Apple's AdServices framework which campaign produced this
+  install and merges the answer onto the user's marketing context — no host-app
+  code, no ATT prompt (the attribution token is available regardless of what the
+  user answered, because it identifies the ad rather than the person).
+
+  Populates `attributionSource: "asa"` plus the campaign, ad group / ad, keyword
+  and conversion type Apple returns. This is the only Apple API that attributes
+  an install to a campaign for an INDIVIDUAL user; every other iOS network
+  reports through SKAdNetwork, which is anonymous by construction. Apps needing
+  those networks still forward an MMP's answer through `updateContext`.
+
+  Notes on the edges, all of which are ordinary rather than errors: Apple 404s
+  for a few seconds after a fresh install, so the lookup retries (3 attempts, 5s
+  apart) instead of concluding "no attribution"; a definitive answer is
+  remembered so the lookup runs about once per install, while offline / token-
+  not-ready outcomes retry on the next launch; and an install Apple reports as
+  NOT Search Ads records nothing at all — notably not `"organic"`, since it may
+  well have come from another paid network.
+
 ## [1.3.7] - 2026-09-02
 
 ### Fixed

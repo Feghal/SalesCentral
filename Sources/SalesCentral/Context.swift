@@ -279,7 +279,10 @@ public struct NetworkContext: Encodable, Sendable {
     }
 }
 
-public struct MarketingContext: Encodable, Sendable {
+// Equatable so callers (and `AdServicesAttribution.Outcome`) can compare
+// resolved attribution — the fields are all optional scalars, so the
+// synthesized conformance is exactly the right one.
+public struct MarketingContext: Encodable, Sendable, Equatable {
     public var idfa: String?
     public var idfv: String?
     public var attStatus: String?
@@ -322,5 +325,5 @@ public struct ConsentContext: Encodable, Sendable {
 /// this to CHANGELOG.md's newest entry (the admin renders this value as
 /// each user's "SDK" field).
 public enum SDKMetadata {
-    public static let version = "1.3.7"
+    public static let version = "1.3.8"
 }
