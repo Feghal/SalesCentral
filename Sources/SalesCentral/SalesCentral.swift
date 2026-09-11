@@ -549,7 +549,7 @@ public enum SalesCentral {
     }
 
     /// Throw when a transaction API is invoked on the facade under
-    /// analyticsOnly. MainActor + nonisolated let → synchronous read.
+    /// analyticsOnly. MainActor + nonisolated var → synchronous read.
     private static func guardTransactionsAllowed(_ operation: String) throws {
         if shared.analyticsOnly {
             SalesLog.warn(.sdk, "\(operation) blocked — SDK is configured analyticsOnly")

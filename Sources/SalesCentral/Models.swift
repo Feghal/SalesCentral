@@ -357,6 +357,9 @@ public struct RestoreResult: Decodable, Sendable {
     public let paywalls: [SalesPaywall]?
     public let remoteConfig: [String: SalesAnyValue]?
     public let experimentAssignments: [String: String]?
+    /// Server-driven analytics-only for this platform (server ≥ 2026-09-11);
+    /// `nil` on older servers.
+    public let analyticsOnly: Bool?
 
     /// Explicit memberwise init so the SDK's local fallback paths
     /// (no-receipts restore, tests) don't have to spell out `products: nil`.
@@ -368,7 +371,8 @@ public struct RestoreResult: Decodable, Sendable {
         products: [SalesProduct]? = nil,
         paywalls: [SalesPaywall]? = nil,
         remoteConfig: [String: SalesAnyValue]? = nil,
-        experimentAssignments: [String: String]? = nil
+        experimentAssignments: [String: String]? = nil,
+        analyticsOnly: Bool? = nil
     ) {
         self.token = token
         self.user = user
@@ -378,6 +382,7 @@ public struct RestoreResult: Decodable, Sendable {
         self.remoteConfig = remoteConfig
         self.experimentAssignments = experimentAssignments
         self.products = products
+        self.analyticsOnly = analyticsOnly
     }
 }
 

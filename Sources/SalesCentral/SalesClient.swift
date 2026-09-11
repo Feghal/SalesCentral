@@ -434,6 +434,12 @@ public actor SalesClient {
         }
         if let rc = resp.remoteConfig { remoteConfigCache = rc }
         if let ea = resp.experimentAssignments { experimentAssignments = ea }
+        // Same rule as absorbBundle: only when the server sent it — an older
+        // server must not reset a cached value; `false` IS a value.
+        if let v = resp.analyticsOnly {
+            serverAnalyticsOnly.withLock { $0 = v }
+            config.tokenStore.writeServerAnalyticsOnly(v)
+        }
         return resp
     }
 

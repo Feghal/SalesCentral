@@ -156,6 +156,32 @@ final class ServerDrivenAnalyticsOnlyTests: XCTestCase {
         catch let SalesError.invalidState(reason) { XCTAssertEqual(reason, "analytics_only") }
         catch { XCTFail("unexpected \(error)") }
     }
+
+    /// A receipt-bearing restore is a config bundle too: the server's flag is
+    /// absorbed from RestoreResult exactly like from createOrFetchUser.
+    func testRestoreBundleAbsorbsServerFlag() async throws {
+        let session = Self.recordingSession()
+        SDARecordingURLProtocol.next = { req in
+            var payload: [String: Any] = [
+                "ok": true, "token": "t2", "restored": true, "applied": [],
+                "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "user": ["id": "owner-1", "premium": ["tier": "free"], "credits": ["balance": 0], "entitlements": [:], "features": []],
+            ]
+            payload["analyticsOnly"] = true
+            return Self.ok(payload, for: req)
+        }
+        let tokenStore = InMemoryTokenStore()
+        tokenStore.writeAttestKeyId("mock-key-id")
+        let client = SalesClient(Self.fullConfig(tokenStore: tokenStore), urlSession: session, attestService: SDAStubAttestService())
+        XCTAssertFalse(client.analyticsOnly, "nothing known before the restore")
+        let result = try await client.restorePurchases(receipts: ["caller.supplied.jws"])
+        XCTAssertTrue(result.restored)
+        XCTAssertEqual(result.analyticsOnly, true, "RestoreResult decodes the field")
+        XCTAssertTrue(client.analyticsOnly, "absorbed from the restore bundle")
+        XCTAssertEqual(tokenStore.readServerAnalyticsOnly(), true, "cached for the next launch")
+        let hit = SDARecordingURLProtocol.requests.compactMap { $0.url?.lastPathComponent }
+        XCTAssertTrue(hit.contains("BBBBBBBBBBBB"), "restoreUser endpoint was hit; saw \(hit)")
+    }
 }
 
 // MARK: - Fixtures
