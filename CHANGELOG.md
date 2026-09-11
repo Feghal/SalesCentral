@@ -4,6 +4,25 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.4.0] - 2026-09-11
+
+### Added
+- **Server-driven analytics-only.** Every config bundle (`createOrFetchUser`,
+  `restoreUser`) now carries the server's per-platform `analyticsOnly`, and
+  the SDK honours it: `SalesCentral.start()` skips the subscription fetch,
+  the StoreKit observer and the product prefetch, and transaction APIs throw
+  `SalesError.invalidState("analytics_only")` — without a plist key and
+  without an app update. The value is cached in the `TokenStore` (UserDefaults
+  in the default store) so relaunches are correct before bootstrap.
+- `TokenStore.readServerAnalyticsOnly()` / `writeServerAnalyticsOnly(_:)`,
+  with default implementations (`nil` / no-op) so custom stores keep compiling.
+
+### Changed
+- `SalesClient.analyticsOnly` is now the **effective** value — plist `OR`
+  server. The plist value alone is `SalesClient.configAnalyticsOnly`. An
+  explicit plist `true` is never overridden by the server; to go paid,
+  remove the key and turn the server flag off (Settings → iOS).
+
 ## [1.3.9] - 2026-09-11
 
 ### Fixed (server)

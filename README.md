@@ -86,15 +86,19 @@ inside Info.plist instead — the SDK checks both locations.
 Integrate the SDK for everything except purchases — apps that don't sell
 through SalesCentral, or that handle payments elsewhere.
 
-Set `analyticsOnly` to `true` in `SalesCentral.plist` — the admin's SDK
-config card's **Analytics-only** toggle generates this, keeping every
-token so the file also parses on SDKs before 1.3.0. On SDK 1.3.0+ you
-may additionally omit `applyPurchases`, `currentSubscription`,
-`spendCredits`, and `claimReward`. The SDK never touches StoreKit or the
-transaction endpoints, and transaction APIs throw
-`SalesError.invalidState("analytics_only")` instead. Everything else —
-identity, sessions, events, user properties, push, remote config, and
-experiments — works unchanged.
+Turn on **Analytics-only (Apple)** under the app's Settings → iOS in the
+admin. On SDK 1.4.0+ that is all: the server tells the SDK at launch, and
+the SDK never touches StoreKit or the transaction endpoints — no
+subscription fetch, no transaction observer, no product prefetch — and
+transaction APIs throw `SalesError.invalidState("analytics_only")`.
+Everything else — identity, sessions, events, user properties, push,
+remote config, and experiments — works unchanged.
+
+Builds on SDK 1.3.x need the plist key as well: the admin's SDK config
+card emits `analyticsOnly` into `SalesCentral.plist` whenever the server
+flag is on (keeping every token so the file also parses before 1.3.0). An
+explicit plist `true` always wins, so going paid later on such a build is
+two steps: remove the key, then turn the server flag off.
 
 Events and sessions fired before the user exists (or while offline) queue
 in memory (cap 500) and flush automatically with their original timestamps.
