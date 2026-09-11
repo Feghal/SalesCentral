@@ -79,6 +79,50 @@ public struct PremiumState: Decodable, Sendable, Equatable {
     public let isTrial: Bool?
     public let trialEndsAt: Date?
 
+    /// Billing issue (Apple `DID_FAIL_TO_RENEW`, SDK 1.3.9 / server 2026-09).
+    /// Non-nil while Apple is still retrying the charge — up to 60 days —
+    /// which means updating the payment method restores service with no new
+    /// purchase; show "update your payment method", not a paywall. Cleared
+    /// by a successful renewal, a final expiry, or a refund. `nil` on older
+    /// servers.
+    public let billingIssueDetectedAt: Date?
+    /// End of Apple's Billing Grace Period, when one applies. During grace
+    /// the subscriber keeps access: the server extends `expiresAt` to this
+    /// date, so `isPaid` stays true with no client change.
+    public let gracePeriodExpiresAt: Date?
+    /// Server-derived summary: `active` | `grace` | `billing_retry` |
+    /// `expired` | `none`. Informational — `isPaid`, `isInGracePeriod` and
+    /// `isInBillingRetry` are derived locally from the fields above and do
+    /// not depend on it. `nil` on older servers.
+    public let status: String?
+
+    public init(tier: String, expiresAt: Date?, source: String?, isTrial: Bool?, trialEndsAt: Date?,
+                billingIssueDetectedAt: Date? = nil, gracePeriodExpiresAt: Date? = nil, status: String? = nil) {
+        self.tier = tier
+        self.expiresAt = expiresAt
+        self.source = source
+        self.isTrial = isTrial
+        self.trialEndsAt = trialEndsAt
+        self.billingIssueDetectedAt = billingIssueDetectedAt
+        self.gracePeriodExpiresAt = gracePeriodExpiresAt
+        self.status = status
+    }
+
+    /// True while Apple is retrying a failed renewal charge (grace period or
+    /// not). Apple stops after 60 days; an older stamp is treated as closed.
+    public var hasBillingIssue: Bool {
+        guard let at = billingIssueDetectedAt else { return false }
+        return Date().timeIntervalSince(at) < 60 * 86_400
+    }
+
+    /// Paid AND in billing retry: a Billing Grace Period. Access continues
+    /// until `gracePeriodExpiresAt`; prompt for a payment-method update.
+    public var isInGracePeriod: Bool { isPaid && hasBillingIssue }
+
+    /// Not paid, but Apple is still retrying — updating the payment method
+    /// restores the subscription without a new purchase.
+    public var isInBillingRetry: Bool { !isPaid && hasBillingIssue }
+
     /// True when the user currently has paid (non-free) access. Respects
     /// `expiresAt`: a lapsed premium reports `false` immediately — no server
     /// round-trip — so a long-running app reflects expiry the moment it passes.
@@ -249,12 +293,24 @@ public struct RetentionClaimResult: Decodable, Sendable, Equatable {
 public struct SubscriptionDetail: Decodable, Sendable, Equatable {
     public let id: String
     public let productId: String
+    /// Renewal state: `active` | `cancelled` (renewal off, paid through
+    /// `expiresAt`) | `billing_retry` (Billing Grace Period — access continues
+    /// until `gracePeriodExpiresAt`) | `expired`. An `expired` subscription
+    /// with `isInBillingRetry == true` is one Apple is still trying to charge.
     public let status: String
     public let isInTrial: Bool?
     public let trialEndsAt: Date?
+    /// Apple's paid-through date for the latest transaction. NOT extended by
+    /// a grace period — see `gracePeriodExpiresAt`.
     public let expiresAt: Date?
     public let isAutoRenewing: Bool
     public let environment: String
+    /// See `PremiumState.billingIssueDetectedAt` / `gracePeriodExpiresAt`.
+    /// `nil` on older servers.
+    public let billingIssueDetectedAt: Date?
+    public let gracePeriodExpiresAt: Date?
+    /// Apple is still retrying the charge (server-capped at Apple's 60 days).
+    public let isInBillingRetry: Bool?
 }
 
 public struct CurrentSubscriptionResponse: Decodable, Sendable, Equatable {

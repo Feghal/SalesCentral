@@ -4,6 +4,50 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.3.9] - 2026-09-11
+
+### Fixed (server)
+- **A subscriber in Apple's Billing Grace Period is paid.** Reported as
+  "subscriber reported as free for 12 days": a yearly plan whose first charge
+  failed sat in a 16-day grace period — StoreKit kept it in
+  `Transaction.currentEntitlements` with renewal state `.inGracePeriod` — while
+  the API answered `premium.tier: "free"`, `source: "expired"` throughout, and
+  every `restorePurchases()` came back 200 with the premium still free.
+
+  Two server gaps, both closed. `DID_FAIL_TO_RENEW` / `GRACE_PERIOD` moved the
+  subscription to `billing_retry` and nothing else: Apple keeps the
+  transaction's `expiresDate` static (the grace end lives ONLY in the renewal
+  info's `gracePeriodExpiresDate`), so `premium.expiresAt` stayed at the old
+  period end and the next read downgraded the user. The webhook now records
+  the grace end and extends `premium.expiresAt` to it — so `isPaid`
+  (`tier != "free" && expiresAt > now`) is true for the whole grace period on
+  every SDK version, including 1.3.5 and 1.3.7, with no client change. And
+  receipt ingest rejected the lapsed transaction as `expired_transaction`
+  before looking at the subscription; a receipt whose subscription is in a
+  live grace period is now applied (idempotently — nothing is re-granted) and
+  restores the tier, so a restore during grace answers paid.
+
+  What the server reports through the retry lifecycle:
+  - `DID_FAIL_TO_RENEW` / `GRACE_PERIOD` → paid, `expiresAt` = grace end.
+  - `GRACE_PERIOD_EXPIRED` (or no grace period at all) → not paid, but the
+    billing issue stays open: Apple keeps retrying for up to 60 days and
+    `GET /subscriptions/current` keeps the row visible with
+    `isInBillingRetry: true` and `isAutoRenewing` from Apple's renewal info.
+  - `DID_RENEW` / `BILLING_RECOVERY` → paid for the new period; the issue is
+    closed. A recovered transaction uploaded by the StoreKit observer before
+    the webhook lands closes it just the same.
+  - `EXPIRED` / `BILLING_RETRY` → expired for good; no billing issue.
+
+### Added
+- `PremiumState.billingIssueDetectedAt`, `.gracePeriodExpiresAt`, `.status`
+  (`active` | `grace` | `billing_retry` | `expired` | `none`), and the derived
+  `hasBillingIssue`, `isInGracePeriod`, `isInBillingRetry`. Show "update your
+  payment method" (deep link: `https://apps.apple.com/account/billing`) when
+  `hasBillingIssue`, instead of a paywall — a payment-method update restores
+  the subscription with no new purchase. All `nil` / `false` on older servers.
+- `SubscriptionDetail.billingIssueDetectedAt`, `.gracePeriodExpiresAt`,
+  `.isInBillingRetry`, from `GET /subscriptions/current`.
+
 ## [1.3.8] - 2026-09-09
 
 ### Added
