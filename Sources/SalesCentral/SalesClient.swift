@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import os
 
 /// The single entry point for talking to the SalesCentral backend.
 ///
@@ -19,9 +20,22 @@ public actor SalesClient {
 
     private let config: SalesConfig
 
-    /// True when the SDK is configured analytics-only. Nonisolated so
+    /// The plist / `init` analytics-only flag. Immutable; still makes the
+    /// transaction tokens optional at parse time and always wins (§2.4).
+    public nonisolated let configAnalyticsOnly: Bool
+
+    /// Last `analyticsOnly` the SERVER reported for this platform in a config
+    /// bundle (createOrFetchUser / restoreUser) — seeded from the TokenStore
+    /// cache so relaunches are right before bootstrap. Lock-protected so the
+    /// MainActor facade can read it synchronously.
+    private nonisolated let serverAnalyticsOnly: OSAllocatedUnfairLock<Bool>
+
+    /// EFFECTIVE analytics-only: plist OR server. Every runtime decision
+    /// (bootstrap skips, guards, observer) reads this. Nonisolated so
     /// MainActor code (`SalesStore`, `SalesCentral`) reads it synchronously.
-    public nonisolated let analyticsOnly: Bool
+    public nonisolated var analyticsOnly: Bool {
+        configAnalyticsOnly || serverAnalyticsOnly.withLock { $0 }
+    }
 
     private let session: URLSession
     private let encoder: JSONEncoder
@@ -200,7 +214,8 @@ public actor SalesClient {
         receiptProvider: ReceiptProviding? = nil
     ) {
         self.config = config
-        self.analyticsOnly = config.analyticsOnly
+        self.configAnalyticsOnly = config.analyticsOnly
+        self.serverAnalyticsOnly = OSAllocatedUnfairLock(initialState: config.tokenStore.readServerAnalyticsOnly() ?? false)
         self.session = urlSession
         self.attestService = attestService ?? LiveAppAttestService()
         self.appTransactionService = appTransactionService ?? LiveAppTransactionService()
@@ -278,6 +293,8 @@ public actor SalesClient {
         let remoteConfig: [String: SalesAnyValue]?
         let experimentAssignments: [String: String]?
         let retention: RetentionStatus?
+        /// Server-driven analytics-only for this platform (server ≥ 2026-09-11).
+        let analyticsOnly: Bool?
     }
 
     /// Common path for every endpoint that returns a config bundle.
@@ -297,6 +314,13 @@ public actor SalesClient {
         if let rc = resp.remoteConfig { remoteConfigCache = rc }
         if let ea = resp.experimentAssignments { experimentAssignments = ea }
         if let retention = resp.retention { retentionStatus = retention }
+        // Only when the server sent it: an older server must not reset a
+        // cached value; a `false` IS a value and re-enables the machinery on
+        // this launch's remaining steps and the next launch.
+        if let v = resp.analyticsOnly {
+            serverAnalyticsOnly.withLock { $0 = v }
+            config.tokenStore.writeServerAnalyticsOnly(v)
+        }
         SalesLog.debug(.sdk, "absorbed bundle — user=\(resp.user.id) products=\(configuredProductIDs.count) paywalls=\(paywallsByKey.count) remoteConfig=\(remoteConfigCache.count) experiments=\(experimentAssignments.count) rewardAvailable=\(retentionStatus?.available ?? false)")
     }
 
