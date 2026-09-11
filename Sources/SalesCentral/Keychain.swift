@@ -28,6 +28,12 @@ public protocol TokenStore: Sendable {
     func readAttestKeyId() -> String?
     func writeAttestKeyId(_ id: String)
     func clearAttestKeyId()
+
+    /// Last `analyticsOnly` the SERVER reported for this platform (SDK 1.4.0).
+    /// App configuration, not identity: `clear()` / `clearClientId()` leave it
+    /// alone. Default: never cached (`nil`).
+    func readServerAnalyticsOnly() -> Bool?
+    func writeServerAnalyticsOnly(_ value: Bool)
 }
 
 public extension TokenStore {
@@ -38,6 +44,9 @@ public extension TokenStore {
     func readAttestKeyId() -> String? { nil }
     func writeAttestKeyId(_ id: String) {}
     func clearAttestKeyId() {}
+
+    func readServerAnalyticsOnly() -> Bool? { nil }
+    func writeServerAnalyticsOnly(_ value: Bool) {}
 }
 
 /// Default token store — system Keychain with a UserDefaults shadow.
@@ -68,6 +77,9 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
     private let account: String
     private let defaultsKey: String
     private let defaults: UserDefaults
+    /// UserDefaults-only (not secret, no Keychain entry): the server's
+    /// analytics-only hint for this platform. Namespaced like the shadows.
+    private var serverAnalyticsOnlyKey: String { "\(service).serverAnalyticsOnly" }
 
     public init(
         service: String? = nil,
@@ -192,6 +204,14 @@ public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
         defaults.removeObject(forKey: attestKeyIdDefaultsKey)
     }
 
+    public func readServerAnalyticsOnly() -> Bool? {
+        defaults.object(forKey: serverAnalyticsOnlyKey) as? Bool
+    }
+
+    public func writeServerAnalyticsOnly(_ value: Bool) {
+        defaults.set(value, forKey: serverAnalyticsOnlyKey)
+    }
+
     // ------------------------------------------------------------------
 
     private func readKeychain() -> String? {
@@ -221,6 +241,7 @@ public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     public init(initial: String? = nil) { self.token = initial }
     private var clientId_: String?
     private var attestKeyId_: String?
+    private var serverAnalyticsOnly_: Bool?
     public func read() -> String? { lock.lock(); defer { lock.unlock() }; return token }
     public func write(_ token: String) { lock.lock(); defer { lock.unlock() }; self.token = token }
     public func clear() { lock.lock(); defer { lock.unlock() }; self.token = nil }
@@ -230,4 +251,6 @@ public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
     public func readAttestKeyId() -> String? { lock.lock(); defer { lock.unlock() }; return attestKeyId_ }
     public func writeAttestKeyId(_ id: String) { lock.lock(); defer { lock.unlock() }; attestKeyId_ = id }
     public func clearAttestKeyId() { lock.lock(); defer { lock.unlock() }; attestKeyId_ = nil }
+    public func readServerAnalyticsOnly() -> Bool? { lock.lock(); defer { lock.unlock() }; return serverAnalyticsOnly_ }
+    public func writeServerAnalyticsOnly(_ value: Bool) { lock.lock(); defer { lock.unlock() }; serverAnalyticsOnly_ = value }
 }
