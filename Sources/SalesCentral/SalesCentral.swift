@@ -281,6 +281,9 @@ public enum SalesCentral {
         if _productsTask == nil {
             SalesLog.debug(.store, "loadProducts() — no prefetch in flight, bootstrapping on demand")
             if !_bootstrapped { await start() }                 // populates _productsTask
+            // start() may have just learned analyticsOnly from the server (the
+            // cached value was stale) — never reach StoreKit in that case.
+            try guardTransactionsAllowed("loadProducts")
             if _productsTask == nil {
                 _productsTask = Task { try await fetchProductsFromStoreKit() }
             }
