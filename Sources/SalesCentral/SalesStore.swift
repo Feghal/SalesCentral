@@ -27,6 +27,11 @@ public final class SalesStore: ObservableObject {
     /// True once a user has actually been established (a successful bootstrap).
     /// Stays false after an offline failure so `ensureBootstrapped()` retries.
     public private(set) var didBootstrap = false
+    /// Why the most recent bootstrap attempt failed; nil once one succeeds.
+    /// Kept as thrown — `lastError` flattens anything that isn't a
+    /// `SalesError` into `.network` — so `start()` can tell an offline
+    /// device from a server rejection or an App Attest failure.
+    private(set) var lastBootstrapError: Error?
     /// In-flight bootstrap, so concurrent callers share one attempt.
     private var bootstrapTask: Task<Void, Never>?
 
@@ -64,6 +69,7 @@ public final class SalesStore: ObservableObject {
         sessionTracker.start()
         do {
             user = try await client.ensureUser(context: context)
+            lastBootstrapError = nil
             products = await client.configuredProducts
             retention = await client.retentionStatus
             if client.analyticsOnly {
@@ -76,8 +82,10 @@ public final class SalesStore: ObservableObject {
                 sessionTracker.onForeground = { [weak self] in await self?.refreshSubscription() }
             }
         } catch let err as SalesError {
+            lastBootstrapError = err
             lastError = err
         } catch {
+            lastBootstrapError = error
             lastError = .network(error.localizedDescription)
         }
     }

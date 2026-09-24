@@ -111,6 +111,16 @@ the server, then attaches a per-request hardware assertion to money-touching
 calls (user creation, restore, purchases, credit spends, reward claims).
 `SalesCentral.start()` handles this automatically — nothing to call.
 
+Asserted calls go out one at a time per `SalesClient` (use one client per
+process, as `SalesCentral` does), because App Attest counters must reach the
+server in the order they were signed; concurrent `ensureUser()` /
+`refreshConfig()` calls that would send the same request share one. The
+device key is replaced only when the server no longer knows it
+(`unknown_attest_key`), DeviceCheck reports it gone (`invalidKey` /
+`invalidInput` twice in a row), or `unknownSystemFailure` persists through
+retries. Other failures are retried on the same key or surfaced, since every
+new key costs an Apple attestation.
+
 Three things must be configured:
 
 1. Add the App Attest entitlement to your app target

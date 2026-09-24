@@ -39,8 +39,12 @@ public actor SalesClient {
 
     private let session: URLSession
     private let encoder: JSONEncoder
+    /// Sorted keys, so equal contexts encode to equal bytes — `encoder`'s key
+    /// order varies from call to call. Only for `userFetchesInFlight` keys.
+    private let requestKeyEncoder: JSONEncoder
     private let decoder: JSONDecoder
     private let attestService: AppAttestServicing
+    private let attestRetry: AttestRetrySchedule
     private let appTransactionService: AppTransactionProviding
     private let receiptProvider: ReceiptProviding
 
@@ -213,17 +217,36 @@ public actor SalesClient {
         appTransactionService: AppTransactionProviding? = nil,
         receiptProvider: ReceiptProviding? = nil
     ) {
+        self.init(
+            config, urlSession: urlSession, attestService: attestService,
+            appTransactionService: appTransactionService, receiptProvider: receiptProvider,
+            attestRetry: .standard
+        )
+    }
+
+    init(
+        _ config: SalesConfig, urlSession: URLSession,
+        attestService: AppAttestServicing?,
+        appTransactionService: AppTransactionProviding?,
+        receiptProvider: ReceiptProviding?,
+        attestRetry: AttestRetrySchedule
+    ) {
         self.config = config
         self.configAnalyticsOnly = config.analyticsOnly
         self.serverAnalyticsOnly = OSAllocatedUnfairLock(initialState: config.tokenStore.readServerAnalyticsOnly() ?? false)
         self.session = urlSession
         self.attestService = attestService ?? LiveAppAttestService()
+        self.attestRetry = attestRetry
         self.appTransactionService = appTransactionService ?? LiveAppTransactionService()
         self.receiptProvider = receiptProvider ?? LiveReceiptProvider()
 
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         self.encoder = enc
+        let keyEnc = JSONEncoder()
+        keyEnc.dateEncodingStrategy = .iso8601
+        keyEnc.outputFormatting = [.sortedKeys]
+        self.requestKeyEncoder = keyEnc
 
         let dec = JSONDecoder()
         // The server serializes dates via JSON.stringify, which emits
@@ -252,15 +275,34 @@ public actor SalesClient {
     /// and saves the returned JWT to the token store. On subsequent launches
     /// (with the JWT present) it fetches the existing user and merges any
     /// context you passed in.
+    ///
+    /// Concurrent calls that would send the identical request — the bootstrap
+    /// and paywall-driven refreshes at app start — share one round trip.
     @discardableResult
     public func ensureUser(context: UserContext = .current()) async throws -> SalesUser {
         var ctx = context
         ctx.clientId = clientId()   // idempotent-create key (see clientId())
+        let attachUserToken = config.tokenStore.read() != nil
+        var requestKey = try requestKeyEncoder.encode(ctx)
+        requestKey.append(attachUserToken ? 1 : 0)
+        if let inFlight = userFetchesInFlight[requestKey] { return try await inFlight.value }
+        let fetch = Task { try await self.fetchUser(ctx, attachUserToken: attachUserToken) }
+        userFetchesInFlight[requestKey] = fetch
+        defer { userFetchesInFlight[requestKey] = nil }
+        return try await fetch.value
+    }
+
+    /// createOrFetchUser requests in flight, keyed by body bytes plus whether
+    /// a user token rides along. Like `attestInFlight`, identical callers
+    /// share one Task; a call whose body differs never joins another.
+    private var userFetchesInFlight: [Data: Task<SalesUser, Error>] = [:]
+
+    private func fetchUser(_ ctx: UserContext, attachUserToken: Bool) async throws -> SalesUser {
         let resp: ConfigBundleResponse = try await request(
             .createOrFetchUser,
             method: "POST",
             body: ctx,
-            attachUserToken: config.tokenStore.read() != nil
+            attachUserToken: attachUserToken
         )
         absorbBundle(resp)
         // A token now exists — deliver anything queued pre-user. Fire and
@@ -948,6 +990,32 @@ public actor SalesClient {
     /// callers would each generate + register their own key.
     private var attestInFlight: Task<String, Error>?
 
+    /// One asserted request in flight at a time, held from signing until the
+    /// server answers. The server rejects an assertion whose
+    /// counter is not above the last one it accepted (`assertion_replay`), so
+    /// two calls signed and sent in parallel can fail on arrival order alone;
+    /// and parallel signing on one key coincided with spurious DeviceCheck
+    /// errors in the 2026-09-23 iOS 27 logs. FIFO.
+    private var assertionSlotTaken = false
+    private var assertionSlotQueue: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireAssertionSlot() async {
+        guard assertionSlotTaken else {
+            assertionSlotTaken = true
+            return
+        }
+        await withCheckedContinuation { assertionSlotQueue.append($0) }
+    }
+
+    /// Hand the slot to the longest waiter, or free it.
+    private func releaseAssertionSlot() {
+        if assertionSlotQueue.isEmpty {
+            assertionSlotTaken = false
+        } else {
+            assertionSlotQueue.removeFirst().resume()
+        }
+    }
+
     /// One-time flag so the unattested warning logs once per process, not
     /// once per call.
     private var warnedUnattested = false
@@ -1011,24 +1079,54 @@ public actor SalesClient {
         var activeKeyId = keyId
         let assertion: Data
         do {
-            assertion = try await attestService.generateAssertion(activeKeyId, clientDataHash: clientDataHash)
-        } catch {
-            // The stored key can no longer sign — its Secure Enclave key was
-            // invalidated (device restore, key rotation, container reset). The
-            // keyId persists in the Keychain across reinstalls, so this would
-            // otherwise be a permanent wall. Discard it, attest a fresh key,
-            // and sign once more. The challenge above is not consumed until the
-            // asserted request reaches the server, so it stays valid here.
-            SalesLog.warn(.sdk, "generateAssertion failed for stored key (\(error)) — re-attesting a fresh key")
+            assertion = try await signAssertion(activeKeyId, clientDataHash: clientDataHash)
+        } catch where AttestFailure(error).retiresKey {
+            // The stored key can no longer sign, even after retries — its
+            // Secure Enclave key is gone (reinstall, device restore) or stuck.
+            // The keyId persists in the Keychain across reinstalls, so this
+            // would otherwise be a permanent wall. Discard it, attest a fresh
+            // key, and sign once more. Every new key costs an Apple attestation
+            // (throttled) and a server AttestedDevice, so only these failures
+            // get here. The challenge above is not consumed until the asserted
+            // request reaches the server, so it stays valid here.
+            SalesLog.warn(.sdk, "stored attest key can no longer sign (\(error)) — re-attesting a fresh key")
             config.tokenStore.clearAttestKeyId()
             activeKeyId = try await ensureAttestedKeyId()
-            assertion = try await attestService.generateAssertion(activeKeyId, clientDataHash: clientDataHash)
+            assertion = try await signAssertion(activeKeyId, clientDataHash: clientDataHash)
         }
         return [
             "x-attest-key-id": activeKeyId,
             "x-attest-challenge": challenge,
             "x-attest-assertion": assertion.base64EncodedString(),
         ]
+    }
+
+    /// Sign with `keyId`, retrying where DeviceCheck's first answer may not be
+    /// its last: a rejected key is re-checked once (one rejection is not proof
+    /// the key is gone — the iOS 27 logs had one on a key that signed fine for
+    /// concurrent calls), and a system or service failure is retried on
+    /// `attestRetry`. Throws the last error when the retries run out.
+    private func signAssertion(_ keyId: String, clientDataHash: Data) async throws -> Data {
+        var transientWaits = attestRetry.transient[...]
+        var recheckedRejection = false
+        while true {
+            do {
+                return try await attestService.generateAssertion(keyId, clientDataHash: clientDataHash)
+            } catch {
+                let failure = AttestFailure(error)
+                let wait: UInt64
+                if failure == .keyRejected, !recheckedRejection {
+                    recheckedRejection = true
+                    wait = attestRetry.recheckRejectedKey
+                } else if failure.isTransient, let next = transientWaits.popFirst() {
+                    wait = next
+                } else {
+                    throw error
+                }
+                SalesLog.warn(.sdk, "generateAssertion failed (\(error)) — retrying the same key")
+                try await Task.sleep(nanoseconds: wait)
+            }
+        }
     }
 
     private func request<B: Encodable, T: Decodable>(
@@ -1038,13 +1136,27 @@ public actor SalesClient {
         attachUserToken: Bool,
         isAttestRetry: Bool = false
     ) async throws -> T {
+        // The user token as of the call, read before waiting for a turn. A
+        // call queued behind a 403 token_key_mismatch must not read the store
+        // while that call re-mints (it's empty then): the server answers a
+        // tokenless spend 401 and makes a new user for a tokenless properties
+        // update.
+        let userToken = attachUserToken ? config.tokenStore.read() : nil
+
+        // Asserted calls take turns: see `assertionSlotTaken`. Released as
+        // soon as the response is in, before the retry paths below re-enter
+        // request().
+        var holdsAssertionSlot = Self.assertedEndpoints.contains(endpoint) && attestService.isSupported
+        if holdsAssertionSlot { await acquireAssertionSlot() }
+        defer { if holdsAssertionSlot { releaseAssertionSlot() } }
+
         let url = config.url(for: endpoint)
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue(config.apiKey, forHTTPHeaderField: "x-app-key")
         var hasUserToken = false
-        if attachUserToken, let token = config.tokenStore.read() {
-            req.setValue(token, forHTTPHeaderField: "x-user-token")
+        if let userToken {
+            req.setValue(userToken, forHTTPHeaderField: "x-user-token")
             hasUserToken = true
         }
         var bodyData: Data? = nil
@@ -1097,6 +1209,10 @@ public actor SalesClient {
             SalesLog.error(.http, "✗ \(method) \(endpoint) network: \(error.localizedDescription)")
             throw SalesError.network(error.localizedDescription)
         }
+        if holdsAssertionSlot {
+            releaseAssertionSlot()
+            holdsAssertionSlot = false
+        }
         guard let http = resp as? HTTPURLResponse else {
             SalesLog.error(.http, "✗ \(method) \(endpoint) no HTTP response")
             throw SalesError.network("no HTTP response")
@@ -1130,6 +1246,7 @@ public actor SalesClient {
             if http.statusCode == 403, err.error == "token_key_mismatch",
                Self.assertedEndpoints.contains(endpoint), attachUserToken, !isAttestRetry {
                 config.tokenStore.clear()
+                // Tokenless, so never joins the user fetch that got this 403.
                 _ = try await ensureUser()
                 return try await request(endpoint, method: method, body: body,
                                          attachUserToken: attachUserToken, isAttestRetry: true)

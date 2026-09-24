@@ -4,6 +4,42 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## Unreleased
+
+### Fixed
+- **Asserted calls no longer race each other at launch.** The bootstrap
+  (re-run by `loadProducts()` after a failed attempt) and paywall refreshes
+  each fetched a challenge, signed with the same App Attest key and sent
+  `createOrFetchUser` at the same time (about five at once on an iOS 27
+  device, 2026-09-23). The server rejects an assertion whose counter is not
+  above the last one it accepted, so parallel requests could fail as
+  `assertion_replay` on arrival order alone, and the parallel signing
+  coincided with spurious DeviceCheck errors (codes 0 and 3) on a key that
+  signed fine for the other calls. Asserted calls now go out one at a time
+  per `SalesClient`, from signing until the server answers; one waits for
+  the call ahead of it, including that call's DeviceCheck retries.
+- **Identical `createOrFetchUser` calls share one request.** `ensureUser()`,
+  `refreshConfig()` and `paywall(key:)` cache misses that would send the
+  same body join the request already in flight instead of each sending
+  their own challenge, assertion and round trip. A call whose body differs
+  (`updateContext` with new context, `setUserProperties`) is never merged.
+- **The App Attest key is replaced only when it is really unusable.** Any
+  `generateAssertion` error used to discard the stored key and attest a new
+  one, costing an Apple attestation (throttled) and leaving an orphaned
+  `AttestedDevice` on the server each time. Now:
+  - `invalidKey` / `invalidInput` (a key from a previous install, restore
+    or migration): re-checked once; replaced only if it repeats.
+  - `unknownSystemFailure`: retried on the same key (3 attempts over about
+    2 s); replaced only if it never clears, since a stuck code 0 is only
+    fixed by a new key and our key ID survives reinstalls in the Keychain.
+  - `serverUnavailable`: retried on the same key; never replaced.
+  - Anything else: the error surfaces and the key is kept.
+- **`start()` no longer blames the network for every failed bootstrap.** Its
+  warning said "likely offline" even for an HTTP 401 on an online device.
+  It now names the failure (`server answered HTTP 401 invalid_assertion`,
+  or the App Attest error) and says "likely offline" only for a transport
+  error.
+
 ## [1.4.0] - 2026-09-11
 
 ### Added

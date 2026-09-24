@@ -7,6 +7,9 @@ import Foundation
 #if canImport(UserNotifications)
 import UserNotifications
 #endif
+#if canImport(DeviceCheck)
+import DeviceCheck
+#endif
 
 /// Top-level entry point. The SDK reads its configuration from a
 /// `SalesCentral.plist` file in your app bundle (or, for legacy projects,
@@ -109,7 +112,7 @@ public enum SalesCentral {
             // No user established (e.g. offline first launch). Do NOT mark
             // _bootstrapped — leave it retryable — and watch for reconnect so
             // we recover automatically once the network returns.
-            SalesLog.warn(.sdk, "start() — bootstrap failed (no user; likely offline). Watching for reconnect to retry.")
+            SalesLog.warn(.sdk, bootstrapFailureMessage(store.lastBootstrapError))
             startReconnectMonitor()
             return
         }
@@ -133,6 +136,28 @@ public enum SalesCentral {
         // blocked by the StoreKit network call.
         if _productsTask == nil {
             _productsTask = Task { try await fetchProductsFromStoreKit() }
+        }
+    }
+
+    /// `start()`'s log line for a failed bootstrap. Only a transport error
+    /// means the device is probably offline; a server rejection or an App
+    /// Attest failure on an online device says what it actually was.
+    nonisolated static func bootstrapFailureMessage(_ error: Error?) -> String {
+        let retry = "Watching for reconnect to retry."
+        switch error {
+        case SalesError.network(let detail)?:
+            return "start() — bootstrap failed: network error (\(detail)); likely offline. \(retry)"
+        case SalesError.http(let status, let code, _)?:
+            return "start() — bootstrap failed: server answered HTTP \(status) \(code). \(retry)"
+        case let error?:
+            #if canImport(DeviceCheck)
+            if let dc = error as? DCError {
+                return "start() — bootstrap failed: App Attest could not sign the request (DeviceCheck error \(dc.code.rawValue)). \(retry)"
+            }
+            #endif
+            return "start() — bootstrap failed: \(error). \(retry)"
+        case nil:
+            return "start() — bootstrap failed (no user). \(retry)"
         }
     }
 
