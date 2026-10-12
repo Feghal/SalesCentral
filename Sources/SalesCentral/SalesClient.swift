@@ -675,6 +675,50 @@ public actor SalesClient {
     }
 
     // ------------------------------------------------------------------
+    // MARK: - Promo codes
+    // ------------------------------------------------------------------
+
+    /// 1.5.0: redeem a promo code for the current user. Every business outcome is a
+    /// `.rejected(reason:…)`; transport and server failures throw `SalesError`. On success the cached
+    /// user is replaced with the server's.
+    ///
+    /// Do NOT ship an in-app redeem UI in an iOS app: App Store Review Guideline 3.1.1 forbids
+    /// unlocking features with your own codes (use Apple's Offer Codes). This API exists for parity
+    /// and server-side tooling. Codes are free — never sell them.
+    public func redeemPromoCode(_ code: String) async throws -> PromoRedemptionResult {
+        try guardTransactionsAllowed("redeemPromoCode")
+        guard let token = config.tokens.redeemPromoCode, !token.isEmpty else {
+            throw SalesError.invalidState(
+                "redeemPromoCode token not configured — regenerate SalesCentral.plist from the admin's SDK config card"
+            )
+        }
+        struct Body: Encodable { let code: String }
+        let response: PromoRedeemResponse = try await request(
+            .redeemPromoCode, method: "POST",
+            body: Body(code: Self.normalisePromoCode(code)), attachUserToken: true
+        )
+        let result = try response.result()
+        if case let .redeemed(_, user?) = result { currentUser = user }
+        SalesLog.info(.sdk, "redeemPromoCode — \(response.ok ? "redeemed" : "rejected: \(response.error ?? "")")")
+        return result
+    }
+
+    /// A promo code as the server stores it: NFKC, upper-case, ASCII A–Z0–9 only. The raw input is cut
+    /// at 128 UTF-16 code units before normalising — the same unit the server (`slice(0, 128)`) and the
+    /// Android SDK (`take(128)`) cut by; a surrogate pair split at the boundary becomes U+FFFD, which
+    /// the ASCII filter drops.
+    static func normalisePromoCode(_ input: String) -> String {
+        let cut = String(decoding: Array(input.utf16.prefix(128)), as: UTF16.self)
+        let folded = cut.precomposedStringWithCompatibilityMapping.uppercased()
+        var out = String.UnicodeScalarView()
+        for scalar in folded.unicodeScalars where ("A"..."Z").contains(scalar) || ("0"..."9").contains(scalar) {
+            out.append(scalar)
+            if out.count == 128 { break }
+        }
+        return String(out)
+    }
+
+    // ------------------------------------------------------------------
     // MARK: - Analytics outbox
     // ------------------------------------------------------------------
 
@@ -967,7 +1011,7 @@ public actor SalesClient {
     /// Endpoints that must carry a hardware assertion. Mirrors the server's
     /// ENDPOINT_META `assert` flags — keep the two lists in sync.
     private static let assertedEndpoints: Set<SalesConfig.Endpoint> = [
-        .createOrFetchUser, .restoreUser, .applyPurchases, .spendCredits, .claimReward,
+        .createOrFetchUser, .restoreUser, .applyPurchases, .spendCredits, .claimReward, .redeemPromoCode,
     ]
 
     /// 401 codes that mean "your attest proof was bad", NOT "your user

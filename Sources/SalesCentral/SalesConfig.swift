@@ -159,7 +159,8 @@ public struct SalesConfig: Sendable {
                 recordEvent:         need("recordEvent"),
                 attestChallenge:     need("attestChallenge"),
                 attestKey:           need("attestKey"),
-                claimReward:         t["claimReward"]
+                claimReward:         t["claimReward"],
+                redeemPromoCode:     t["redeemPromoCode"]
             ),
             analyticsOnly: analyticsOnly
         )
@@ -190,6 +191,7 @@ public struct SalesConfig: Sendable {
         case .currentSubscription: token = tokens.currentSubscription ?? "" // guarded in SalesClient
         case .spendCredits:        token = tokens.spendCredits ?? ""        // guarded in SalesClient
         case .claimReward:         token = tokens.claimReward ?? "" // guarded in SalesClient.claimReward()
+        case .redeemPromoCode:     token = tokens.redeemPromoCode ?? "" // guarded in SalesClient.redeemPromoCode()
         case .recordSession:       token = tokens.recordSession
         case .recordEvent:         token = tokens.recordEvent
         case .attestChallenge:     token = tokens.attestChallenge
@@ -207,6 +209,7 @@ public struct SalesConfig: Sendable {
         case currentSubscription
         case spendCredits
         case claimReward
+        case redeemPromoCode
         case recordSession
         case recordEvent
         case attestChallenge
@@ -230,6 +233,9 @@ public struct SalesConfig: Sendable {
         /// have this token. Regenerate the config from the admin's SDK
         /// config card to pick it up.
         public let claimReward: String?
+        /// 1.5.0, optional — configs generated before promo codes don't have
+        /// it; regenerate from the admin's SDK config card.
+        public let redeemPromoCode: String?
 
         public init(
             createOrFetchUser: String,
@@ -241,7 +247,8 @@ public struct SalesConfig: Sendable {
             recordEvent: String,
             attestChallenge: String,
             attestKey: String,
-            claimReward: String? = nil
+            claimReward: String? = nil,
+            redeemPromoCode: String? = nil
         ) {
             self.createOrFetchUser   = createOrFetchUser
             self.restoreUser         = restoreUser
@@ -253,6 +260,7 @@ public struct SalesConfig: Sendable {
             self.attestChallenge     = attestChallenge
             self.attestKey           = attestKey
             self.claimReward         = claimReward
+            self.redeemPromoCode     = redeemPromoCode
         }
     }
 }

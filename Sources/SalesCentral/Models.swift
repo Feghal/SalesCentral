@@ -290,6 +290,102 @@ public struct RetentionClaimResult: Decodable, Sendable, Equatable {
     }
 }
 
+/// 1.5.0: premium a promo code granted — `tier` until `expiresAt`; `nil` `expiresAt` is lifetime.
+public struct PromoPremiumGrant: Decodable, Sendable, Equatable {
+    public let tier: String
+    public let expiresAt: Date?
+    public var isLifetime: Bool { expiresAt == nil }
+
+    enum CodingKeys: String, CodingKey { case tier, expiresAt }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tier = (try? c.decode(String.self, forKey: .tier)) ?? "pro"
+        expiresAt = try? c.decodeIfPresent(Date.self, forKey: .expiresAt)
+    }
+}
+
+/// 1.5.0: why a code's premium was not applied — the user already had it.
+public enum PromoPremiumSkip: String, Sendable, Equatable { case subscriber, lifetime }
+
+/// 1.5.0: one redemption — what it granted and when.
+public struct PromoRedemption: Decodable, Sendable, Equatable {
+    public let id: String
+    public let code: String
+    public let campaign: String?
+    public let credits: Int
+    public let premium: PromoPremiumGrant?
+    public let premiumSkipped: PromoPremiumSkip?
+    public let redeemedAt: Date?
+
+    enum CodingKeys: String, CodingKey { case id, code, campaign, credits, premium, premiumSkipped, redeemedAt }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(String.self, forKey: .id)) ?? ""
+        code = (try? c.decode(String.self, forKey: .code)) ?? ""
+        campaign = try? c.decodeIfPresent(String.self, forKey: .campaign)
+        credits = (try? c.decodeIfPresent(Int.self, forKey: .credits)) ?? 0
+        premium = try? c.decodeIfPresent(PromoPremiumGrant.self, forKey: .premium)
+        premiumSkipped = (try? c.decodeIfPresent(String.self, forKey: .premiumSkipped)).flatMap { PromoPremiumSkip(rawValue: $0) }
+        redeemedAt = try? c.decodeIfPresent(Date.self, forKey: .redeemedAt)
+    }
+}
+
+/// 1.5.0: why a code was not redeemed; `.unknown` keeps a reason this SDK does not know yet.
+public enum PromoRejectReason: Sendable, Equatable {
+    case invalidCode, notStarted, expired, usedUp, alreadyRedeemed, alreadyRedeemedBatch
+    case alreadyPremium, tooManyAttempts, notEligible
+    case unknown(String)
+
+    init(wire: String) {
+        switch wire {
+        case "invalid_code": self = .invalidCode
+        case "code_not_started": self = .notStarted
+        case "code_expired": self = .expired
+        case "code_used_up": self = .usedUp
+        case "already_redeemed": self = .alreadyRedeemed
+        case "already_redeemed_batch": self = .alreadyRedeemedBatch
+        case "already_premium": self = .alreadyPremium
+        case "too_many_attempts": self = .tooManyAttempts
+        case "not_eligible": self = .notEligible
+        default: self = .unknown(wire)
+        }
+    }
+}
+
+/// 1.5.0: the answer of `redeemPromoCode` — every business outcome is a value; transport and server
+/// failures throw `SalesError`.
+public enum PromoRedemptionResult: Sendable {
+    case redeemed(PromoRedemption, user: SalesUser?)
+    case rejected(reason: PromoRejectReason, retryAfterSeconds: Int?, previous: PromoRedemption?)
+}
+
+/// The wire shape behind `PromoRedemptionResult`.
+struct PromoRedeemResponse: Decodable {
+    let ok: Bool
+    let redemption: PromoRedemption?
+    let user: SalesUser?
+    let error: String?
+    let retryAfterSeconds: Int?
+
+    enum CodingKeys: String, CodingKey { case ok, redemption, user, error, retryAfterSeconds }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = (try? c.decode(Bool.self, forKey: .ok)) ?? false
+        redemption = try? c.decodeIfPresent(PromoRedemption.self, forKey: .redemption)
+        user = try? c.decodeIfPresent(SalesUser.self, forKey: .user)
+        error = try? c.decodeIfPresent(String.self, forKey: .error)
+        retryAfterSeconds = try? c.decodeIfPresent(Int.self, forKey: .retryAfterSeconds)
+    }
+
+    func result() throws -> PromoRedemptionResult {
+        if ok {
+            guard let redemption else { throw SalesError.decoding("PromoRedemptionResult: missing 'redemption'") }
+            return .redeemed(redemption, user: user)
+        }
+        return .rejected(reason: PromoRejectReason(wire: error ?? ""), retryAfterSeconds: retryAfterSeconds, previous: redemption)
+    }
+}
+
 public struct SubscriptionDetail: Decodable, Sendable, Equatable {
     public let id: String
     public let productId: String

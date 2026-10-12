@@ -135,6 +135,7 @@ final class AnalyticsOnlyTests: XCTestCase {
         await expectAnalyticsOnly("currentSubscription") { _ = try await client.currentSubscription() }
         await expectAnalyticsOnly("spendCredits")        { _ = try await client.spendCredits(1, reason: "t") }
         await expectAnalyticsOnly("claimReward")         { _ = try await client.claimReward() }
+        await expectAnalyticsOnly("redeemPromoCode")     { _ = try await client.redeemPromoCode("LAUNCH50") }
         await expectAnalyticsOnly("restorePurchases")    { _ = try await client.restorePurchases(receipts: ["jws"]) }
         XCTAssertTrue(RecordingURLProtocol.requests.isEmpty,
                       "guards must fire before any network I/O; saw \(RecordingURLProtocol.requests.compactMap(\.url))")

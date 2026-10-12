@@ -193,6 +193,13 @@ public final class SalesStore: ObservableObject {
         return result
     }
 
+    /// 1.5.0 — see `SalesClient.redeemPromoCode(_:)`. Not for an in-app redeem UI in an iOS app (guideline 3.1.1).
+    public func redeemPromoCode(_ code: String) async throws -> PromoRedemptionResult {
+        let result = try await client.redeemPromoCode(code)
+        if case let .redeemed(_, user?) = result { self.user = user }
+        return result
+    }
+
     /// Set a single user property. See `SalesClient.setUserProperty`.
     public func setUserProperty(_ key: String, _ value: SalesPropertyValue?) async {
         do {

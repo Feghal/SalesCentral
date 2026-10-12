@@ -4,7 +4,10 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
-## Unreleased
+## [1.5.0] - 2026-10-12
+
+### Added
+- **`redeemPromoCode(_:)`** on `SalesClient` and `SalesStore` → `PromoRedemptionResult` (`.redeemed` / `.rejected(reason:retryAfterSeconds:previous:)`); the optional `redeemPromoCode` plist token. Not for an in-app redeem UI in iOS apps (App Store Review Guideline 3.1.1).
 
 ### Fixed
 - **Asserted calls no longer race each other at launch.** The bootstrap
