@@ -15,11 +15,17 @@ final class BillingIssueTests: XCTestCase {
         return dec
     }
 
+    /// `hasBillingIssue` closes 60 days after detection, so a fixture with a
+    /// fixed date stops describing an open issue once that window has passed.
+    private func iso(daysAgo days: Double) -> String {
+        ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: -days * 86_400))
+    }
+
     func testGracePeriodDecodesAsPaidWithBillingIssue() throws {
         let json = """
         { "tier": "pro", "expiresAt": "2099-01-01T00:00:00Z", "source": "subscription",
           "isTrial": false, "trialEndsAt": null,
-          "billingIssueDetectedAt": "2026-08-23T10:00:00Z",
+          "billingIssueDetectedAt": "\(iso(daysAgo: 1))",
           "gracePeriodExpiresAt": "2099-01-01T00:00:00Z",
           "status": "grace" }
         """.data(using: .utf8)!
@@ -36,8 +42,8 @@ final class BillingIssueTests: XCTestCase {
     func testBillingRetryAfterGraceDecodesAsNotPaidWithBillingIssue() throws {
         let json = """
         { "tier": "free", "expiresAt": null, "source": "expired",
-          "billingIssueDetectedAt": "2026-08-23T10:00:00Z",
-          "gracePeriodExpiresAt": "2026-09-08T10:00:00Z",
+          "billingIssueDetectedAt": "\(iso(daysAgo: 30))",
+          "gracePeriodExpiresAt": "\(iso(daysAgo: 14))",
           "status": "billing_retry" }
         """.data(using: .utf8)!
         let p = try decoder().decode(PremiumState.self, from: json)
@@ -46,6 +52,20 @@ final class BillingIssueTests: XCTestCase {
         XCTAssertTrue(p.hasBillingIssue, "updating the payment method restores service — not a paywall")
         XCTAssertFalse(p.isInGracePeriod)
         XCTAssertTrue(p.isInBillingRetry)
+    }
+
+    func testBillingIssueClosesAfterAppleStopsRetrying() throws {
+        // Apple gives up after 60 days. A stale stamp must not keep telling the
+        // user that updating their payment method will restore the subscription.
+        let json = """
+        { "tier": "free", "expiresAt": null, "source": "expired",
+          "billingIssueDetectedAt": "\(iso(daysAgo: 61))",
+          "status": "billing_retry" }
+        """.data(using: .utf8)!
+        let p = try decoder().decode(PremiumState.self, from: json)
+        XCTAssertNotNil(p.billingIssueDetectedAt)
+        XCTAssertFalse(p.hasBillingIssue)
+        XCTAssertFalse(p.isInBillingRetry)
     }
 
     func testOlderServersOmitTheFields() throws {
