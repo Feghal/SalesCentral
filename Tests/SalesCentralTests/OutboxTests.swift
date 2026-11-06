@@ -226,6 +226,51 @@ final class OutboxTests: XCTestCase {
 
     /// Retryable failure (500): the batch requeues — nothing lost, and the
     /// next explicit flush retries exactly once more.
+    private func wireClientEventIds(_ body: Data?) -> [String?] {
+        guard let body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let events = json["events"] as? [[String: Any]] else { return [] }
+        return events.map { $0["clientEventId"] as? String }
+    }
+
+    /// The server dedupes on this id. If a batch is stored but the response is
+    /// lost, the retry must carry the SAME ids or every retry stores another copy.
+    func testRetriedEventKeepsItsClientEventId() async throws {
+        BodyRecordingURLProtocol.reset()
+        URLProtocol.registerClass(BodyRecordingURLProtocol.self)
+        defer { URLProtocol.unregisterClass(BodyRecordingURLProtocol.self) }
+        let client = makeClient(session: stubbedSession(),
+                                tokenStore: InMemoryTokenStore(initial: "user-token"))
+
+        BodyRecordingURLProtocol.next = Self.status(500)
+        await client.track("evt")                       // direct send → 500 → enqueued
+        await client.flushOutbox()                      // still 500 → requeued
+        BodyRecordingURLProtocol.next = { OutboxTests.ok200($0) }
+        await client.flushOutbox()                      // recovers
+
+        let sent = BodyRecordingURLProtocol.recorded.map { wireClientEventIds($0.body) }
+        XCTAssertEqual(sent.count, 3)
+        let first = try XCTUnwrap(sent.first?.first ?? nil, "event sent without a clientEventId")
+        XCTAssertFalse(first.isEmpty)
+        for attempt in sent { XCTAssertEqual(attempt, [first]) }
+    }
+
+    func testEachEventGetsItsOwnClientEventId() async {
+        BodyRecordingURLProtocol.reset()
+        URLProtocol.registerClass(BodyRecordingURLProtocol.self)
+        defer { URLProtocol.unregisterClass(BodyRecordingURLProtocol.self) }
+        let client = makeClient(session: stubbedSession(),
+                                tokenStore: InMemoryTokenStore(initial: "user-token"))
+        BodyRecordingURLProtocol.next = { OutboxTests.ok200($0) }
+
+        await client.trackBatch([(name: "a", properties: [:]), (name: "b", properties: [:])])
+        await client.track("c")
+
+        let ids = BodyRecordingURLProtocol.recorded.flatMap { wireClientEventIds($0.body) }.compactMap { $0 }
+        XCTAssertEqual(ids.count, 3)
+        XCTAssertEqual(Set(ids).count, 3)
+    }
+
     func testRetryableFailureRequeuesBatch() async {
         BodyRecordingURLProtocol.reset()
         URLProtocol.registerClass(BodyRecordingURLProtocol.self)

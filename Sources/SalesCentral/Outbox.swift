@@ -4,7 +4,11 @@ import Foundation
 /// late flush is indistinguishable server-side from a timely send (the
 /// server honors client `occurredAt`).
 enum OutboxItem: Sendable {
-    case event(name: String, properties: [String: AnyEncodable], occurredAt: Date)
+    /// `clientEventId` is minted once, when the event is created, and goes out
+    /// unchanged on every send. A batch can be stored while its response is
+    /// lost; the server drops the retry's copies by this id.
+    case event(name: String, properties: [String: AnyEncodable], occurredAt: Date,
+               clientEventId: String = UUID().uuidString)
     case session(start: Date, end: Date, durationSec: Int?)
 }
 
@@ -15,7 +19,7 @@ extension OutboxItem: Equatable {
     /// bodies in the client tests instead.
     static func == (lhs: OutboxItem, rhs: OutboxItem) -> Bool {
         switch (lhs, rhs) {
-        case let (.event(ln, _, lo), .event(rn, _, ro)):
+        case let (.event(ln, _, lo, _), .event(rn, _, ro, _)):
             return ln == rn && lo == ro
         case let (.session(ls, le, ld), .session(rs, re, rd)):
             return ls == rs && le == re && ld == rd

@@ -4,6 +4,11 @@ All notable changes to the SalesCentral Swift SDK are tracked here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [semver](https://semver.org).
 
+## [1.5.1] - 2026-11-06
+
+### Fixed
+- **Retried analytics batches no longer store duplicate events.** Every event now carries a `clientEventId`, minted once and resent unchanged, so the server can drop the copies when a batch was stored but its response was lost. One device stored the same 50-event batch 61 times before this. Needs a server that dedupes on the id; older servers ignore the field.
+
 ## [1.5.0] - 2026-10-12
 
 ### Added

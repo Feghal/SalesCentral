@@ -729,6 +729,7 @@ public actor SalesClient {
         let name: String
         let properties: [String: AnyEncodable]
         let occurredAt: Date
+        let clientEventId: String
     }
     fileprivate struct EventBatchBody: Encodable { let events: [EventBody] }
     fileprivate struct SessionBody: Encodable {
@@ -799,11 +800,12 @@ public actor SalesClient {
             switch batch {
             case .events(let items):
                 let events = items.compactMap { item -> EventBody? in
-                    guard case let .event(name, properties, occurredAt) = item else {
+                    guard case let .event(name, properties, occurredAt, clientEventId) = item else {
                         assertionFailure("events batch holds a session")
                         return nil
                     }
-                    return EventBody(name: name, properties: properties, occurredAt: occurredAt)
+                    return EventBody(name: name, properties: properties, occurredAt: occurredAt,
+                                     clientEventId: clientEventId)
                 }
                 let _: EmptyOK = try await request(
                     .recordEvent, method: "POST",
